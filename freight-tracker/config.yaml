@@ -2,44 +2,58 @@
 # Freight Rate Tracker — Configuration
 # ============================================================
 
-# --- Scraper toggles ---
+# ---------------------------------------------------------------------------
+# Scraper toggles
+# ---------------------------------------------------------------------------
 scrapers:
   drewry: true
   freightos: true
   scfi: true
 
-# --- Analysis parameters ---
+# ---------------------------------------------------------------------------
+# Alert thresholds
+# ---------------------------------------------------------------------------
+alert_thresholds:
+  wow_pct: 10        # WoW % move that triggers an intraday Telegram alert
+  stress_pct: 40     # Route % above 12-week avg that flags STRESS
+  divergence_pct: 15 # FBX vs WCI spread that flags DIVERGENCE
+
+# ---------------------------------------------------------------------------
+# Routes monitored by the intraday check.
+# Leave empty ([]) to monitor every route currently in the DB.
+# ---------------------------------------------------------------------------
+routes_of_interest:
+  - "Shanghai→Los Angeles"
+  - "Shanghai→Rotterdam"
+  - "New York→Rotterdam"
+  - "Shanghai→Genoa"
+
+# ---------------------------------------------------------------------------
+# Timezone used for display / log labels (does not affect cron schedule,
+# which always runs in UTC).
+# ---------------------------------------------------------------------------
+timezone: "Asia/Singapore"
+
+# ---------------------------------------------------------------------------
+# Analysis parameters
+# ---------------------------------------------------------------------------
 analysis:
-  spike_threshold_pct: 10.0   # % weekly change that triggers a spike signal
   short_ma_weeks: 4
   long_ma_weeks: 12
   trend_window_weeks: 4
-  history_weeks: 24            # weeks of history used in signal computation
+  history_weeks: 12
 
-# --- Alert thresholds (USD per FEU) ---
-# Add route-specific hard limits here. When the current rate exceeds
-# the threshold an intraday alert is fired.
-alerts:
-  spike_pct: 10.0              # also used in intraday checks
-  rate_thresholds:
-    # Example entries — customise for your monitored routes:
-    # "China/East Asia → North America West Coast": 6000
-    # "Shanghai → Europe": 4000
-
-# --- Telegram notifications ---
-# Prefer setting TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID as environment
-# variables (e.g. GitHub Actions secrets). Values here are fallbacks.
-telegram:
-  bot_token: ""     # override with env var TELEGRAM_BOT_TOKEN
-  chat_id: ""       # override with env var TELEGRAM_CHAT_ID
-
-# --- Database ---
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
 database:
   path: "data/freight.db"
 
-# --- Logging ---
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
 logging:
   level: "INFO"
   file: "scraper.log"
-  max_bytes: 5242880    # 5 MB
+  max_bytes: 5242880   # 5 MB
   backup_count: 3

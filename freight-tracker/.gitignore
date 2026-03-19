@@ -1,16 +1,20 @@
-# Generated data
-data/
-reports/output/
+# Logs (rotated, not useful in version control)
 scraper.log
 scraper.log.*
 
-# Python
+# Python bytecode
 __pycache__/
 *.py[cod]
 *.egg-info/
+
+# Virtual environments
 .venv/
 venv/
 .env
 
-# Playwright browsers
+# Playwright browser binaries
 /ms-playwright/
+
+# NOTE: data/freight.db is intentionally NOT gitignored.
+# The weekly_report.yml workflow commits it back to the repo so that
+# rate history persists across runs without an external storage dependency.

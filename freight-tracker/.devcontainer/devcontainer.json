@@ -1,0 +1,57 @@
+{
+  // -------------------------------------------------------------------------
+  // Dev container for the Container Freight Rate Tracker
+  // Opens in GitHub Codespaces with Python 3.11, all dependencies installed,
+  // and Playwright browsers ready to go.
+  // -------------------------------------------------------------------------
+  "name": "Freight Rate Tracker",
+
+  // Use Microsoft's official Python 3.11 image
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+
+  // -------------------------------------------------------------------------
+  // VS Code extensions auto-installed in the Codespace
+  // -------------------------------------------------------------------------
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "tamasfe.even-better-toml",
+        "redhat.vscode-yaml",
+        "GitHub.copilot"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "editor.formatOnSave": true,
+        "editor.rulers": [100],
+        "files.trimTrailingWhitespace": true
+      }
+    }
+  },
+
+  // -------------------------------------------------------------------------
+  // Run after the container is created:
+  //   1. Install Python dependencies
+  //   2. Install the Playwright Chromium browser + system deps
+  //   3. Create runtime directories so the first run doesn't fail
+  // -------------------------------------------------------------------------
+  "postCreateCommand": "pip install -r requirements.txt && playwright install chromium --with-deps && mkdir -p data reports/output",
+
+  // Working directory inside the container maps to the project subfolder
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}/freight-tracker",
+
+  // Forward no ports by default (the tracker is a batch process, not a server)
+  "forwardPorts": [],
+
+  // -------------------------------------------------------------------------
+  // Environment variable reminders — set these as Codespace secrets at
+  // https://github.com/settings/codespaces
+  // -------------------------------------------------------------------------
+  "remoteEnv": {
+    "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}",
+    "TELEGRAM_BOT_TOKEN": "${localEnv:TELEGRAM_BOT_TOKEN}",
+    "TELEGRAM_CHAT_ID": "${localEnv:TELEGRAM_CHAT_ID}"
+  }
+}
