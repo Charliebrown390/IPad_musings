@@ -1,0 +1,16 @@
+# Generated data
+data/
+reports/output/
+scraper.log
+scraper.log.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Playwright browsers
+/ms-playwright/
