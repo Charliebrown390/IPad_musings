@@ -1,17 +1,27 @@
 """
 Signal generation for the freight rate tracker.
 
-Signals produced
-----------------
-- trend_up / trend_down : rolling 4-week linear trend direction
-- spike_up  / spike_down : single-week % change above threshold
-- crossover_up / crossover_down : short MA crosses long MA
-- yoy_change : year-on-year rate delta
-- multi_index_divergence : spread between highest and lowest index for same route
+Public API
+----------
+generate_signals(df)
+    Primary entry point. Takes a 12-week history DataFrame and returns a
+    dict keyed by route, each value being a dict of signal labels and
+    supporting numeric values.
+
+generate_weekly_signals()
+    Orchestrator that pulls history from the DB, calls generate_signals(),
+    and persists results via insert_signal(). Returns the flat signal list.
+
+Signal types produced
+---------------------
+- wow_pct          : week-on-week % change (latest week)
+- momentum         : "SPIKE" | "COOLING" | "STABLE"  (4-week rolling avg)
+- divergence       : "DIVERGENCE" | None  (FBX vs WCI >15% spread)
+- stress           : "STRESS" | None  (key EU routes >40% above 12W avg)
+- inflation_score  : 0–100 composite across all routes
 """
 
 import logging
-from datetime import datetime
 from typing import Any
 
 import pandas as pd
@@ -19,263 +29,336 @@ import pandas as pd
 from database.db import (
     get_rate_history,
     get_cross_index_comparison,
-    insert_signal,
     get_latest_rates,
+    insert_signal,
 )
 
 logger = logging.getLogger(__name__)
 
-# Thresholds (configurable via config.yaml — defaults here)
-SPIKE_THRESHOLD_PCT = 10.0     # % weekly change that triggers a spike signal
-SHORT_MA_WEEKS = 4
-LONG_MA_WEEKS = 12
-TREND_WINDOW = 4               # weeks used for linear trend
+# ---------------------------------------------------------------------------
+# Thresholds
+# ---------------------------------------------------------------------------
+SPIKE_MOMENTUM_PCT = 10.0          # WoW % above this → SPIKE
+COOLING_MOMENTUM_PCT = -5.0        # WoW % below this → COOLING
+DIVERGENCE_THRESHOLD_PCT = 15.0    # FBX vs WCI spread → DIVERGENCE
+STRESS_THRESHOLD_PCT = 40.0        # route above 12W avg → STRESS
+STRESS_ROUTES = {
+    "Shanghai → Rotterdam",
+    "Shanghai → Genoa",
+    # common alternative spellings that scrapers may produce
+    "Shanghai/Rotterdam",
+    "Shanghai/Genoa",
+    "SHANGHAI-ROTTERDAM",
+    "SHANGHAI-GENOA",
+}
 
 
 # ---------------------------------------------------------------------------
-# Low-level detectors
+# Per-route signal helpers
 # ---------------------------------------------------------------------------
 
-def detect_spike(
-    series: pd.Series,
-    threshold_pct: float = SPIKE_THRESHOLD_PCT,
-) -> list[dict[str, Any]]:
+def _wow_pct_change(series: pd.Series) -> float | None:
     """
-    Return spike events where week-on-week % change exceeds *threshold_pct*.
+    Return the week-on-week % change for the most-recent data point.
 
     Parameters
     ----------
-    series : pd.Series indexed by ISO date string, values = rate_usd.
-
-    Returns list of dicts: {week_ending, pct_change, signal_type}
+    series : pd.Series
+        Values = rate_usd, sorted ascending by date index.
     """
-    if len(series) < 2:
-        return []
-
-    s = series.sort_index()
-    pct = s.pct_change() * 100
-    events = []
-    for date, val in pct.items():
-        if pd.isna(val):
-            continue
-        if val >= threshold_pct:
-            events.append({"week_ending": date, "value": round(val, 2), "signal_type": "spike_up"})
-        elif val <= -threshold_pct:
-            events.append({"week_ending": date, "value": round(val, 2), "signal_type": "spike_down"})
-    return events
+    s = series.dropna().sort_index()
+    if len(s) < 2:
+        return None
+    prev, curr = s.iloc[-2], s.iloc[-1]
+    if prev == 0:
+        return None
+    return round((curr - prev) / prev * 100, 2)
 
 
-def detect_trend(
-    series: pd.Series,
-    window: int = TREND_WINDOW,
-) -> list[dict[str, Any]]:
+def _momentum_label(series: pd.Series) -> tuple[str, float | None]:
     """
-    Identify trend direction over a rolling *window*.
-
-    Uses the sign of the linear regression slope for each window.
-
-    Returns list of dicts: {week_ending, value (slope), signal_type}
-    """
-    if len(series) < window:
-        return []
-
-    s = series.sort_index().dropna()
-    events = []
-    for i in range(window - 1, len(s)):
-        window_data = s.iloc[i - window + 1 : i + 1]
-        x = list(range(len(window_data)))
-        y = window_data.values
-        # Simple least-squares slope
-        n = len(x)
-        mean_x = sum(x) / n
-        mean_y = sum(y) / n
-        num = sum((xi - mean_x) * (yi - mean_y) for xi, yi in zip(x, y))
-        den = sum((xi - mean_x) ** 2 for xi in x)
-        slope = num / den if den != 0 else 0.0
-
-        signal_type = "trend_up" if slope > 0 else "trend_down"
-        events.append(
-            {
-                "week_ending": s.index[i],
-                "value": round(slope, 4),
-                "signal_type": signal_type,
-            }
-        )
-    return events
-
-
-def detect_crossover(
-    series: pd.Series,
-    short_window: int = SHORT_MA_WEEKS,
-    long_window: int = LONG_MA_WEEKS,
-) -> list[dict[str, Any]]:
-    """
-    Detect golden-cross / death-cross events between short and long moving averages.
-
-    Returns list of dicts: {week_ending, value (spread), signal_type}
-    """
-    if len(series) < long_window:
-        return []
-
-    s = series.sort_index().dropna()
-    short_ma = s.rolling(short_window).mean()
-    long_ma = s.rolling(long_window).mean()
-
-    above = short_ma > long_ma
-    crossovers = above.ne(above.shift())
-
-    events = []
-    for date in crossovers[crossovers].index:
-        if pd.isna(short_ma.get(date)) or pd.isna(long_ma.get(date)):
-            continue
-        spread = round(float(short_ma[date] - long_ma[date]), 2)
-        signal_type = "crossover_up" if above[date] else "crossover_down"
-        events.append({"week_ending": date, "value": spread, "signal_type": signal_type})
-
-    return events
-
-
-# ---------------------------------------------------------------------------
-# High-level orchestrators
-# ---------------------------------------------------------------------------
-
-def compute_signals(
-    route: str,
-    index_name: str | None = None,
-    weeks: int = 24,
-    spike_threshold: float = SPIKE_THRESHOLD_PCT,
-) -> list[dict[str, Any]]:
-    """
-    Run all signal detectors for a single route and return combined events.
-
-    Parameters
-    ----------
-    route       : Exact route label as stored in the DB.
-    index_name  : Optional — filter to a single index source.
-    weeks       : History depth to pull.
-    spike_threshold : % change threshold for spike detection.
+    Compare the latest rate against the 4-week rolling average.
 
     Returns
     -------
-    list[dict]: Each dict contains: route, index_name, signal_type, value, week_ending, notes
+    (label, pct_vs_4w_avg)  where label is "SPIKE" | "COOLING" | "STABLE"
     """
-    history = get_rate_history(route, weeks=weeks, index_name=index_name)
-    if not history:
-        logger.warning("compute_signals: no history for route=%s index=%s", route, index_name)
-        return []
+    s = series.dropna().sort_index()
+    if len(s) < 2:
+        return "STABLE", None
 
-    df = pd.DataFrame(history)
+    window = min(4, len(s) - 1)
+    rolling_avg = s.iloc[-window - 1 : -1].mean()
+    if rolling_avg == 0:
+        return "STABLE", None
+
+    current = s.iloc[-1]
+    pct = (current - rolling_avg) / rolling_avg * 100
+
+    if pct >= SPIKE_MOMENTUM_PCT:
+        label = "SPIKE"
+    elif pct <= COOLING_MOMENTUM_PCT:
+        label = "COOLING"
+    else:
+        label = "STABLE"
+
+    return label, round(pct, 2)
+
+
+def _stress_flag(route: str, series: pd.Series) -> tuple[str | None, float | None]:
+    """
+    Flag STRESS if the route is a key EU lane AND its current rate is
+    more than STRESS_THRESHOLD_PCT above its 12-week average.
+
+    Returns
+    -------
+    ("STRESS", pct_above_avg) or (None, None)
+    """
+    # Normalise for comparison
+    route_upper = route.upper().replace(" ", "").replace("→", "-").replace("/", "-")
+    is_stress_route = any(
+        r.upper().replace(" ", "").replace("→", "-").replace("/", "-") in route_upper
+        or route_upper in r.upper().replace(" ", "").replace("→", "-").replace("/", "-")
+        for r in STRESS_ROUTES
+    )
+    if not is_stress_route:
+        return None, None
+
+    s = series.dropna().sort_index()
+    if len(s) < 2:
+        return None, None
+
+    avg_12w = s.mean()
+    if avg_12w == 0:
+        return None, None
+
+    current = s.iloc[-1]
+    pct_above = (current - avg_12w) / avg_12w * 100
+
+    if pct_above >= STRESS_THRESHOLD_PCT:
+        return "STRESS", round(pct_above, 2)
+    return None, None
+
+
+def _divergence_flag(
+    route: str,
+    df_all: pd.DataFrame,
+) -> tuple[str | None, float | None, float | None]:
+    """
+    Compare the latest FBX and WCI rates for *route*.
+
+    Returns
+    -------
+    ("DIVERGENCE", fbx_rate, wci_rate)  or  (None, fbx_rate, wci_rate)
+    The rates may be None if the index has no data for this route.
+    """
+    route_df = df_all[df_all["route"] == route]
+
+    fbx_rows = route_df[route_df["index_name"].str.contains("FBX|Freightos", case=False, na=False)]
+    wci_rows = route_df[route_df["index_name"].str.contains("WCI|Drewry", case=False, na=False)]
+
+    fbx_rate = fbx_rows.sort_values("week_ending").iloc[-1]["rate_usd"] if not fbx_rows.empty else None
+    wci_rate = wci_rows.sort_values("week_ending").iloc[-1]["rate_usd"] if not wci_rows.empty else None
+
+    if fbx_rate is None or wci_rate is None:
+        return None, fbx_rate, wci_rate
+
+    mean_rate = (fbx_rate + wci_rate) / 2
+    if mean_rate == 0:
+        return None, fbx_rate, wci_rate
+
+    spread_pct = abs(fbx_rate - wci_rate) / mean_rate * 100
+    label = "DIVERGENCE" if spread_pct >= DIVERGENCE_THRESHOLD_PCT else None
+    return label, round(fbx_rate, 2), round(wci_rate, 2)
+
+
+def _inflation_score(route_wow_pcts: list[float]) -> float:
+    """
+    Composite inflationary pressure score, normalised 0–100.
+
+    Uses the mean of all positive WoW % changes, capped at 50 % for
+    normalisation (i.e. a 50 %+ average maps to a score of 100).
+    """
+    if not route_wow_pcts:
+        return 0.0
+    positive = [p for p in route_wow_pcts if p > 0]
+    if not positive:
+        return 0.0
+    mean_positive = sum(positive) / len(positive)
+    score = min(mean_positive / 50.0 * 100, 100.0)
+    return round(score, 1)
+
+
+# ---------------------------------------------------------------------------
+# Primary public function
+# ---------------------------------------------------------------------------
+
+def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
+    """
+    Compute all signals for every route present in *df*.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Must contain columns: index_name, route, rate_usd, week_ending.
+        Typically covers 12 weeks of history per route.
+
+    Returns
+    -------
+    dict[route_str, signal_dict]
+
+    Each signal_dict contains:
+        wow_pct          : float | None   — week-on-week % change
+        momentum         : "SPIKE" | "COOLING" | "STABLE"
+        momentum_vs_4w   : float | None   — % vs 4-week rolling avg
+        divergence       : "DIVERGENCE" | None
+        fbx_rate         : float | None   — latest FBX rate for route
+        wci_rate         : float | None   — latest WCI rate for route
+        stress           : "STRESS" | None
+        stress_pct_above : float | None   — % above 12-week avg (stress routes)
+        inflation_score  : float          — 0–100 composite (same value for all routes)
+        four_week_avg    : float | None   — 4-week rolling average of rate_usd
+    """
+    if df.empty:
+        logger.warning("generate_signals: received empty DataFrame")
+        return {}
+
+    required_cols = {"index_name", "route", "rate_usd", "week_ending"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"generate_signals: DataFrame missing columns: {missing}")
+
+    df = df.copy()
     df["week_ending"] = pd.to_datetime(df["week_ending"])
-    df = df.sort_values("week_ending")
+    df = df.sort_values(["route", "index_name", "week_ending"])
 
-    all_signals: list[dict[str, Any]] = []
+    routes = df["route"].unique().tolist()
+    results: dict[str, dict[str, Any]] = {}
+    wow_pcts_all: list[float] = []
 
-    # Process each index separately if multiple are present
-    for idx_name, group in df.groupby("index_name"):
-        series = group.set_index("week_ending")["rate_usd"].sort_index()
-        series.index = series.index.strftime("%Y-%m-%d")
+    for route in routes:
+        route_df = df[df["route"] == route]
 
-        for event in detect_spike(series, threshold_pct=spike_threshold):
-            all_signals.append(
-                {
-                    "route": route,
-                    "index_name": idx_name,
-                    **event,
-                    "notes": f"Weekly change: {event['value']:.1f}%",
-                }
-            )
-        for event in detect_trend(series):
-            all_signals.append(
-                {
-                    "route": route,
-                    "index_name": idx_name,
-                    **event,
-                    "notes": f"Slope over {TREND_WINDOW}-week window: {event['value']}",
-                }
-            )
-        for event in detect_crossover(series):
-            all_signals.append(
-                {
-                    "route": route,
-                    "index_name": idx_name,
-                    **event,
-                    "notes": (
-                        f"MA{SHORT_MA_WEEKS} vs MA{LONG_MA_WEEKS} spread: {event['value']}"
-                    ),
-                }
-            )
+        # Aggregate across all indices for this route (mean if multiple)
+        agg_series = (
+            route_df.groupby("week_ending")["rate_usd"]
+            .mean()
+            .sort_index()
+        )
 
-    return all_signals
+        # 1. Week-on-week % change
+        wow = _wow_pct_change(agg_series)
+        if wow is not None:
+            wow_pcts_all.append(wow)
 
+        # 2. Momentum label (4-week rolling avg vs current)
+        momentum, momentum_vs_4w = _momentum_label(agg_series)
 
-def _compute_multi_index_divergence(route: str) -> list[dict[str, Any]]:
-    """
-    Emit a signal when the spread between highest and lowest current index
-    rate for a route exceeds 20 % of the mean.
-    """
-    comparison = get_cross_index_comparison(route)
-    if len(comparison) < 2:
-        return []
+        # 4-week average (for report table)
+        window = min(4, len(agg_series))
+        four_week_avg = round(agg_series.iloc[-window:].mean(), 2) if window > 0 else None
 
-    rates = [r["rate_usd"] for r in comparison]
-    max_rate = max(rates)
-    min_rate = min(rates)
-    mean_rate = sum(rates) / len(rates)
-    spread_pct = ((max_rate - min_rate) / mean_rate * 100) if mean_rate else 0
+        # 3. Cross-index divergence (FBX vs WCI)
+        div_label, fbx_rate, wci_rate = _divergence_flag(route, df)
 
-    if spread_pct < 20:
-        return []
+        # 4. Geopolitical stress proxy
+        stress_label, stress_pct = _stress_flag(route, agg_series)
 
-    week_ending = max(r["week_ending"] for r in comparison)
-    return [
-        {
-            "route": route,
-            "index_name": "cross-index",
-            "signal_type": "multi_index_divergence",
-            "value": round(spread_pct, 2),
-            "week_ending": week_ending,
-            "notes": (
-                f"Spread {spread_pct:.1f}% between "
-                f"{max(comparison, key=lambda x: x['rate_usd'])['index_name']} "
-                f"and {min(comparison, key=lambda x: x['rate_usd'])['index_name']}"
-            ),
+        results[route] = {
+            "wow_pct": wow,
+            "momentum": momentum,
+            "momentum_vs_4w": momentum_vs_4w,
+            "divergence": div_label,
+            "fbx_rate": fbx_rate,
+            "wci_rate": wci_rate,
+            "stress": stress_label,
+            "stress_pct_above": stress_pct,
+            "inflation_score": 0.0,   # back-filled below after all routes processed
+            "four_week_avg": four_week_avg,
         }
-    ]
 
+    # 5. Inflationary pressure score (same value for every route — portfolio-level)
+    score = _inflation_score(wow_pcts_all)
+    for route in results:
+        results[route]["inflation_score"] = score
+
+    logger.info(
+        "generate_signals: processed %d routes, inflation_score=%.1f",
+        len(results),
+        score,
+    )
+    return results
+
+
+# ---------------------------------------------------------------------------
+# DB-backed orchestrator (called from main.py)
+# ---------------------------------------------------------------------------
 
 def generate_weekly_signals(
-    spike_threshold: float = SPIKE_THRESHOLD_PCT,
+    spike_threshold: float = SPIKE_MOMENTUM_PCT,
 ) -> list[dict[str, Any]]:
     """
-    Run signal detection across ALL routes currently in the database and
-    persist new signals via insert_signal().
+    Pull 12 weeks of history from the DB, run generate_signals(), persist
+    results via insert_signal(), and return a flat list of signal dicts.
 
-    Returns the full list of generated signal dicts.
+    Parameters
+    ----------
+    spike_threshold : float
+        Overrides SPIKE_MOMENTUM_PCT if supplied from config.
     """
     latest = get_latest_rates()
     routes = list({r["route"] for r in latest})
-    logger.info("generate_weekly_signals: processing %d routes", len(routes))
+    logger.info("generate_weekly_signals: fetching history for %d routes", len(routes))
 
-    all_signals: list[dict[str, Any]] = []
-
+    all_rows: list[dict] = []
     for route in routes:
-        signals = compute_signals(route, spike_threshold=spike_threshold)
-        divergence = _compute_multi_index_divergence(route)
-        signals.extend(divergence)
+        history = get_rate_history(route, weeks=12)
+        all_rows.extend(history)
 
-        for sig in signals:
+    if not all_rows:
+        logger.warning("generate_weekly_signals: no history rows found in DB")
+        return []
+
+    df = pd.DataFrame(all_rows)
+    signals_by_route = generate_signals(df)
+
+    flat: list[dict[str, Any]] = []
+    for route, sig in signals_by_route.items():
+        # Determine the most-recent week_ending for this route
+        route_rows = [r for r in all_rows if r["route"] == route]
+        week_ending = max(r["week_ending"] for r in route_rows) if route_rows else ""
+
+        # Persist each non-None signal label
+        for signal_type, value, notes in [
+            ("wow_pct", sig["wow_pct"], f"WoW change: {sig['wow_pct']}%"),
+            ("momentum", sig["momentum"], f"vs 4W avg: {sig['momentum_vs_4w']}%"),
+            ("divergence", sig["divergence"], f"FBX={sig['fbx_rate']} WCI={sig['wci_rate']}"),
+            ("stress", sig["stress"], f"{sig['stress_pct_above']}% above 12W avg"),
+            ("inflation_score", sig["inflation_score"], f"Composite score: {sig['inflation_score']}"),
+        ]:
+            if value is None:
+                continue
             try:
                 insert_signal(
-                    route=sig["route"],
-                    signal_type=sig["signal_type"],
-                    value=sig.get("value"),
-                    week_ending=sig["week_ending"],
-                    notes=sig.get("notes", ""),
+                    route=route,
+                    signal_type=str(signal_type),
+                    value=float(value) if isinstance(value, (int, float)) else None,
+                    week_ending=week_ending,
+                    notes=notes,
                 )
             except Exception as exc:
-                logger.error("generate_weekly_signals: failed to insert signal: %s", exc)
+                logger.error("generate_weekly_signals: insert_signal failed: %s", exc)
 
-        all_signals.extend(signals)
+            flat.append(
+                {
+                    "route": route,
+                    "signal_type": signal_type,
+                    "value": value,
+                    "week_ending": week_ending,
+                    "notes": notes,
+                    **{k: sig[k] for k in sig if k != signal_type},
+                }
+            )
 
-    logger.info("generate_weekly_signals: generated %d signals total", len(all_signals))
-    return all_signals
+    logger.info("generate_weekly_signals: persisted signals for %d routes", len(signals_by_route))
+    return flat

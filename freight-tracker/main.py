@@ -57,9 +57,11 @@ logger = logging.getLogger(__name__)
 # Project imports (after logging is configured)
 # ---------------------------------------------------------------------------
 
+import pandas as pd
+
 from scrapers import scrape_drewry, scrape_freightos, scrape_scfi
-from database.db import init_db, insert_rates, get_latest_rates
-from analysis.signals import generate_weekly_signals
+from database.db import init_db, insert_rates, get_latest_rates, get_rate_history
+from analysis.signals import generate_signals, generate_weekly_signals
 from reports.reporter import generate_weekly_report, generate_intraday_alert
 
 
@@ -178,8 +180,14 @@ def main() -> None:
 
     if args.mode == "report-only":
         logger.info("Generating report from existing data (no scraping)")
-        signals = generate_weekly_signals()
-        path = generate_weekly_report(signals=signals)
+        latest_rates = get_latest_rates()
+        routes = list({r["route"] for r in latest_rates})
+        all_rows: list[dict] = []
+        for route in routes:
+            all_rows.extend(get_rate_history(route, weeks=12))
+        signals_by_route = generate_signals(pd.DataFrame(all_rows)) if all_rows else {}
+        generate_weekly_signals()  # persist to DB
+        path = generate_weekly_report(signals_by_route=signals_by_route, latest_rates=latest_rates)
         logger.info("Report saved to %s", path)
         return
 
@@ -199,12 +207,21 @@ def main() -> None:
 
     # --- Weekly: full pipeline ---
     logger.info("Running signal analysis …")
-    signals = generate_weekly_signals(
+    latest_rates = get_latest_rates()
+    routes = list({r["route"] for r in latest_rates})
+    all_rows: list[dict] = []
+    for route in routes:
+        all_rows.extend(get_rate_history(route, weeks=12))
+    signals_by_route = generate_signals(pd.DataFrame(all_rows)) if all_rows else {}
+    generate_weekly_signals(
         spike_threshold=config.get("analysis", {}).get("spike_threshold_pct", 10.0)
-    )
+    )  # persist to DB
 
     logger.info("Generating weekly report …")
-    report_path = generate_weekly_report(signals=signals)
+    report_path = generate_weekly_report(
+        signals_by_route=signals_by_route,
+        latest_rates=latest_rates,
+    )
     logger.info("Weekly pipeline complete. Report: %s", report_path)
 
 

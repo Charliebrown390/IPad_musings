@@ -3,11 +3,19 @@ Report generation and alert dispatch for the freight rate tracker.
 
 Outputs
 -------
-- Markdown weekly report (saved to reports/output/)
-- Telegram message (if TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID are set)
-- Claude AI narrative summary (via Anthropic SDK, if ANTHROPIC_API_KEY is set)
+1. Markdown weekly report
+   - Summary table: Route | FBX Rate | WCI Rate | WoW % | 4W Avg | Signal
+   - 3-sentence executive summary via claude-haiku-4-5-20251001
+
+2. Telegram delivery
+   - Prepends 🚨 alert header if any route carries a SPIKE or STRESS signal
+   - Falls back to saving reports/output/latest_report.md on send failure
+
+All credentials are read exclusively from environment variables:
+    ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 """
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -18,21 +26,17 @@ import anthropic
 import pandas as pd
 import yaml
 
-from database.db import (
-    get_latest_rates,
-    get_rate_history,
-    get_cross_index_comparison,
-    insert_alert,
-)
+from database.db import get_latest_rates, get_rate_history, insert_alert
 
 logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
+FALLBACK_REPORT = OUTPUT_DIR / "latest_report.md"
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Config
 # ---------------------------------------------------------------------------
 
 def _load_config() -> dict:
@@ -42,152 +46,247 @@ def _load_config() -> dict:
     return {}
 
 
+# ---------------------------------------------------------------------------
+# Formatting helpers
+# ---------------------------------------------------------------------------
+
 def _fmt_rate(value: float | None) -> str:
     if value is None:
         return "N/A"
     return f"${value:,.0f}"
 
 
-def _pct_change(current: float, previous: float) -> str:
-    if previous == 0:
+def _fmt_pct(value: float | None) -> str:
+    if value is None:
         return "N/A"
-    pct = (current - previous) / previous * 100
-    arrow = "▲" if pct >= 0 else "▼"
-    return f"{arrow} {abs(pct):.1f}%"
+    arrow = "▲" if value >= 0 else "▼"
+    return f"{arrow} {abs(value):.1f}%"
+
+
+def _signal_label(sig: dict[str, Any]) -> str:
+    """
+    Produce a single display label from a route's signal dict.
+    Priority: STRESS > SPIKE/COOLING > DIVERGENCE > STABLE
+    """
+    if sig.get("stress") == "STRESS":
+        return "🔴 STRESS"
+    momentum = sig.get("momentum", "STABLE")
+    if momentum == "SPIKE":
+        return "🟠 SPIKE"
+    if momentum == "COOLING":
+        return "🔵 COOLING"
+    if sig.get("divergence") == "DIVERGENCE":
+        return "🟡 DIVERGENCE"
+    return "🟢 STABLE"
+
+
+def _has_urgent_signal(signals_by_route: dict[str, dict]) -> bool:
+    """Return True if any route is SPIKE or STRESS."""
+    for sig in signals_by_route.values():
+        if sig.get("momentum") == "SPIKE" or sig.get("stress") == "STRESS":
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
 # Markdown report builder
 # ---------------------------------------------------------------------------
 
+def _build_summary_table(
+    latest_rates: list[dict],
+    signals_by_route: dict[str, dict[str, Any]],
+) -> str:
+    """
+    Build the Route | FBX Rate | WCI Rate | WoW % | 4W Avg | Signal table.
+    One row per unique route, merging FBX and WCI columns.
+    """
+    # Index latest rates by (route, index_name) for O(1) lookup
+    rate_lookup: dict[tuple[str, str], float] = {}
+    for row in latest_rates:
+        key = (row["route"], row["index_name"])
+        rate_lookup[key] = row["rate_usd"]
+
+    routes = sorted({r["route"] for r in latest_rates})
+
+    header = "| Route | FBX Rate | WCI Rate | WoW % | 4W Avg | Signal |"
+    sep    = "|-------|----------|----------|-------|--------|--------|"
+    rows = [header, sep]
+
+    for route in routes:
+        # FBX: match Freightos
+        fbx = next(
+            (v for (r, idx), v in rate_lookup.items()
+             if r == route and ("FBX" in idx or "Freightos" in idx)),
+            None,
+        )
+        # WCI: match Drewry
+        wci = next(
+            (v for (r, idx), v in rate_lookup.items()
+             if r == route and ("WCI" in idx or "Drewry" in idx)),
+            None,
+        )
+
+        sig = signals_by_route.get(route, {})
+        wow = _fmt_pct(sig.get("wow_pct"))
+        avg4w = _fmt_rate(sig.get("four_week_avg"))
+        label = _signal_label(sig)
+
+        rows.append(
+            f"| {route} | {_fmt_rate(fbx)} | {_fmt_rate(wci)} "
+            f"| {wow} | {avg4w} | {label} |"
+        )
+
+    return "\n".join(rows)
+
+
 def _build_markdown_report(
     latest_rates: list[dict],
-    signals: list[dict],
+    signals_by_route: dict[str, dict[str, Any]],
+    ai_summary: str | None,
     report_date: str,
 ) -> str:
-    """Assemble a Markdown-formatted weekly report string."""
+    urgent = _has_urgent_signal(signals_by_route)
+    header_flag = "🚨 " if urgent else ""
+
     lines = [
-        f"# Freight Rate Weekly Report — {report_date}",
-        "",
-        "## Current Rates by Index",
+        f"# {header_flag}Freight Rate Weekly Report — {report_date}",
         "",
     ]
 
-    # Group rates by index
-    df = pd.DataFrame(latest_rates)
-    if df.empty:
-        lines.append("_No rate data available._")
-    else:
-        for index_name, group in df.groupby("index_name"):
-            lines.append(f"### {index_name}")
-            lines.append("")
-            lines.append("| Route | Rate (USD/FEU) | Week Ending |")
-            lines.append("|-------|---------------|-------------|")
-            for _, row in group.sort_values("route").iterrows():
-                lines.append(
-                    f"| {row['route']} | {_fmt_rate(row['rate_usd'])} | {row['week_ending']} |"
-                )
-            lines.append("")
-
-    # Signals section
-    if signals:
+    if ai_summary:
         lines += [
-            "## Signals & Alerts",
+            "## Executive Summary",
             "",
-            "| Route | Signal | Value | Week |",
-            "|-------|--------|-------|------|",
+            ai_summary,
+            "",
+            "---",
+            "",
         ]
-        for sig in signals[:50]:  # cap at 50 rows for readability
-            lines.append(
-                f"| {sig.get('route','')} "
-                f"| {sig.get('signal_type','')} "
-                f"| {sig.get('value','')} "
-                f"| {sig.get('week_ending','')} |"
-            )
-        lines.append("")
+
+    inflation_score = next(
+        (s.get("inflation_score") for s in signals_by_route.values() if s.get("inflation_score") is not None),
+        None,
+    )
+    if inflation_score is not None:
+        lines += [
+            f"**Inflationary Pressure Score: {inflation_score:.0f} / 100**",
+            "",
+        ]
 
     lines += [
+        "## Rate Summary",
+        "",
+        _build_summary_table(latest_rates, signals_by_route),
+        "",
         "---",
-        f"_Generated at {datetime.now(timezone.utc).isoformat()} UTC_",
+        f"_Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC_",
     ]
+
     return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# Claude AI narrative
+# Anthropic executive summary
 # ---------------------------------------------------------------------------
 
-def _generate_ai_narrative(report_markdown: str) -> str | None:
-    """
-    Use the Anthropic API to generate a brief analyst-style narrative
-    summarising the weekly freight rate movements.
+def _build_signal_summary_text(signals_by_route: dict[str, dict[str, Any]]) -> str:
+    """Serialise signals to a compact text block for the LLM prompt."""
+    lines = []
+    for route, sig in signals_by_route.items():
+        parts = [f"Route: {route}"]
+        if sig.get("wow_pct") is not None:
+            parts.append(f"WoW={sig['wow_pct']:+.1f}%")
+        parts.append(f"momentum={sig.get('momentum','STABLE')}")
+        if sig.get("divergence"):
+            parts.append(f"divergence=FBX${sig.get('fbx_rate','?')} vs WCI${sig.get('wci_rate','?')}")
+        if sig.get("stress"):
+            parts.append(f"STRESS({sig.get('stress_pct_above',0):.0f}% above 12W avg)")
+        lines.append(" | ".join(parts))
+    score = next((s["inflation_score"] for s in signals_by_route.values() if s.get("inflation_score")), 0)
+    lines.append(f"Composite inflationary pressure score: {score:.0f}/100")
+    return "\n".join(lines)
 
-    Returns None if ANTHROPIC_API_KEY is not set or the call fails.
+
+def _generate_executive_summary(signals_by_route: dict[str, dict[str, Any]]) -> str | None:
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    Call claude-haiku-4-5-20251001 to produce a 3-sentence executive summary.
+    Returns None if ANTHROPIC_API_KEY is unset or the call fails.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        logger.info("ANTHROPIC_API_KEY not set — skipping AI narrative")
+        logger.info("ANTHROPIC_API_KEY not set — skipping executive summary")
         return None
+
+    signal_text = _build_signal_summary_text(signals_by_route)
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
-            model="claude-opus-4-6",
-            max_tokens=512,
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system="You are a freight market analyst writing for an insurance investment team.",
             messages=[
                 {
                     "role": "user",
                     "content": (
-                        "You are a senior freight market analyst. "
-                        "Based on the following weekly freight rate data, "
-                        "write a concise 3-5 sentence market commentary "
-                        "highlighting notable moves, trends, and any anomalies. "
-                        "Be specific about routes and percentage changes.\n\n"
-                        f"{report_markdown[:3000]}"
+                        f"Given these shipping rate signals:\n\n{signal_text}\n\n"
+                        "Write a 3-sentence executive summary covering: "
+                        "(1) demand trends, "
+                        "(2) inflationary cost pressures from fuel and logistics, "
+                        "(3) geopolitical route risk."
                     ),
                 }
             ],
         )
-        return message.content[0].text
+        return message.content[0].text.strip()
+    except anthropic.APIStatusError as exc:
+        logger.error("Anthropic API error %s: %s", exc.status_code, exc.message)
+        return None
     except Exception as exc:
-        logger.error("AI narrative generation failed: %s", exc)
+        logger.error("Executive summary generation failed: %s", exc)
         return None
 
 
 # ---------------------------------------------------------------------------
-# Telegram dispatch
+# Telegram delivery
 # ---------------------------------------------------------------------------
 
-def _send_telegram(text: str, config: dict) -> bool:
-    """
-    Send *text* via Telegram bot.
+async def _send_telegram_async(text: str, token: str, chat_id: str) -> None:
+    """Send *text* in ≤4 000-char chunks via the Telegram Bot API."""
+    import telegram
 
-    Reads TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID from env vars (preferred)
-    or config.yaml.
+    bot = telegram.Bot(token=token)
+    async with bot:
+        for start in range(0, len(text), 4000):
+            await bot.send_message(
+                chat_id=chat_id,
+                text=text[start : start + 4000],
+                parse_mode="MarkdownV2",
+            )
+
+
+def _escape_md2(text: str) -> str:
+    """Escape characters reserved in Telegram MarkdownV2."""
+    reserved = r"\_*[]()~`>#+-=|{}.!"
+    for ch in reserved:
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
+
+def _send_telegram(text: str) -> bool:
     """
-    token = os.getenv("TELEGRAM_BOT_TOKEN") or config.get("telegram", {}).get("bot_token")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID") or config.get("telegram", {}).get("chat_id")
+    Dispatch *text* via Telegram. Reads credentials from env vars only.
+    Returns True on success, False on failure (caller handles fallback).
+    """
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
     if not token or not chat_id:
-        logger.info("Telegram credentials not configured — skipping notification")
+        logger.info("Telegram credentials not set — skipping notification")
         return False
 
     try:
-        import telegram  # python-telegram-bot
-
-        import asyncio
-
-        async def _send() -> None:
-            bot = telegram.Bot(token=token)
-            # Telegram message limit is 4096 chars
-            for chunk_start in range(0, len(text), 4000):
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=text[chunk_start : chunk_start + 4000],
-                    parse_mode="Markdown",
-                )
-
-        asyncio.run(_send())
+        asyncio.run(_send_telegram_async(text, token, chat_id))
         logger.info("Telegram notification sent to chat_id=%s", chat_id)
         return True
     except Exception as exc:
@@ -200,53 +299,75 @@ def _send_telegram(text: str, config: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 def generate_weekly_report(
-    signals: list[dict[str, Any]] | None = None,
+    signals_by_route: dict[str, dict[str, Any]] | None = None,
+    latest_rates: list[dict] | None = None,
 ) -> Path:
     """
-    Build and save the weekly Markdown report, optionally including signals.
-    Also sends a Telegram notification and AI narrative if configured.
+    Build the weekly Markdown report, call the Anthropic API for an executive
+    summary, and deliver via Telegram (with local fallback).
 
     Parameters
     ----------
-    signals : list[dict], optional
-        Pre-computed signals (from analysis.generate_weekly_signals).
+    signals_by_route : dict, optional
+        Output of analysis.generate_signals(df). If None, an empty dict
+        is used (report will have N/A signal columns).
+    latest_rates : list[dict], optional
+        Pre-fetched latest rates. If None, fetched from the DB.
 
     Returns
     -------
     Path: Absolute path to the saved report file.
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    config = _load_config()
+
+    if latest_rates is None:
+        latest_rates = get_latest_rates()
+
+    if signals_by_route is None:
+        signals_by_route = {}
+
     report_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    latest_rates = get_latest_rates()
+    # 1. AI executive summary
+    ai_summary = _generate_executive_summary(signals_by_route)
+
+    # 2. Markdown report
     report_md = _build_markdown_report(
         latest_rates=latest_rates,
-        signals=signals or [],
+        signals_by_route=signals_by_route,
+        ai_summary=ai_summary,
         report_date=report_date,
     )
 
-    # Optionally prepend AI narrative
-    ai_narrative = _generate_ai_narrative(report_md)
-    if ai_narrative:
-        report_md = f"## AI Market Commentary\n\n{ai_narrative}\n\n---\n\n" + report_md
+    # 3. Save dated copy
+    dated_path = OUTPUT_DIR / f"weekly_report_{report_date}.md"
+    dated_path.write_text(report_md, encoding="utf-8")
+    logger.info("Weekly report saved to %s", dated_path)
 
-    # Save file
-    report_path = OUTPUT_DIR / f"weekly_report_{report_date}.md"
-    report_path.write_text(report_md, encoding="utf-8")
-    logger.info("Weekly report saved to %s", report_path)
+    # 4. Telegram — prepend 🚨 header if urgent signals present
+    urgent = _has_urgent_signal(signals_by_route)
+    tg_header = "🚨 *FREIGHT ALERT* — urgent signals detected\n\n" if urgent else ""
 
-    # Telegram notification — send a trimmed summary
-    summary_lines = [f"*Freight Rate Report — {report_date}*", ""]
-    for r in latest_rates[:10]:  # top 10 for brevity
-        summary_lines.append(
-            f"• {r['index_name']} | {r['route']}: {_fmt_rate(r['rate_usd'])}"
-        )
-    if ai_narrative:
-        summary_lines += ["", ai_narrative[:600]]
-    _send_telegram("\n".join(summary_lines), config)
+    # Build a condensed Telegram message (plain text, avoid MarkdownV2 escaping issues)
+    tg_lines = [f"{tg_header}*Freight Rate Report — {report_date}*", ""]
+    if ai_summary:
+        tg_lines += [ai_summary, ""]
+    tg_lines.append("*Route Signals:*")
+    for route, sig in signals_by_route.items():
+        label = _signal_label(sig).replace("🔴 ", "").replace("🟠 ", "").replace(
+            "🔵 ", ""
+        ).replace("🟡 ", "").replace("🟢 ", "")
+        wow_str = f"{sig['wow_pct']:+.1f}%" if sig.get("wow_pct") is not None else "N/A"
+        tg_lines.append(f"• {route}: {label} ({wow_str} WoW)")
 
-    return report_path
+    tg_text = "\n".join(tg_lines)
+
+    if not _send_telegram(tg_text):
+        # Fallback: persist a copy at the well-known path
+        FALLBACK_REPORT.write_text(report_md, encoding="utf-8")
+        logger.info("Telegram unavailable — report saved to %s", FALLBACK_REPORT)
+
+    return dated_path
 
 
 def generate_intraday_alert(
@@ -256,19 +377,18 @@ def generate_intraday_alert(
     notify: bool = True,
 ) -> None:
     """
-    Log an intraday alert and optionally send a Telegram notification.
+    Log an intraday alert to the DB and optionally send a Telegram notification.
 
     Parameters
     ----------
-    route       : The affected route.
-    alert_type  : e.g. 'spike_up', 'threshold_breach'.
+    route       : Affected route label.
+    alert_type  : e.g. 'spike_up', 'threshold_breach', 'stress'.
     message     : Human-readable alert message.
-    notify      : Whether to send a Telegram message.
+    notify      : Set False to skip Telegram dispatch.
     """
     insert_alert(route=route, alert_type=alert_type, message=message)
     logger.warning("ALERT [%s] %s: %s", alert_type, route, message)
 
     if notify:
-        config = _load_config()
-        telegram_text = f"*FREIGHT ALERT*\nRoute: {route}\nType: {alert_type}\n\n{message}"
-        _send_telegram(telegram_text, config)
+        tg_text = f"🚨 *FREIGHT ALERT*\nRoute: {route}\nType: {alert_type}\n\n{message}"
+        _send_telegram(tg_text)
