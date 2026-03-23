@@ -1,0 +1,81 @@
+name: Intraday Freight Rate Check
+
+# Daily 23:00 UTC = 07:00 SGT (next morning)
+# Reads the existing DB only — no scraping — and fires Telegram alerts
+# for any route that moved more than wow_pct vs its last recorded reading.
+
+on:
+  schedule:
+    - cron: "0 23 * * *"
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: "Enable verbose Python logging"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+env:
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  TZ: "Asia/Singapore"
+
+jobs:
+  intraday-check:
+    name: WoW Spike Check (DB-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Checkout — we need the committed DB from the weekly run
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # 2. Python 3.11
+      # -----------------------------------------------------------------------
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: freight-tracker/requirements.txt
+
+      # -----------------------------------------------------------------------
+      # 3. Dependencies  (Playwright not needed — intraday does no scraping)
+      # -----------------------------------------------------------------------
+      - name: Install Python dependencies
+        working-directory: freight-tracker
+        run: pip install -r requirements.txt
+
+      # -----------------------------------------------------------------------
+      # 4. Ensure output directories exist
+      # -----------------------------------------------------------------------
+      - name: Create runtime directories
+        working-directory: freight-tracker
+        run: mkdir -p data reports/output
+
+      # -----------------------------------------------------------------------
+      # 5. Run the intraday check
+      # -----------------------------------------------------------------------
+      - name: Run intraday WoW check
+        working-directory: freight-tracker
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PYTHONVERBOSE: ${{ github.event.inputs.debug == 'true' && '1' || '' }}
+        run: python main.py --intraday-check
+
+      # -----------------------------------------------------------------------
+      # 6. Upload logs on failure for debugging
+      # -----------------------------------------------------------------------
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: intraday-logs-${{ github.run_id }}
+          path: freight-tracker/scraper.log
+          retention-days: 14
