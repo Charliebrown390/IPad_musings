@@ -196,8 +196,29 @@ def intraday_check(config: dict) -> None:
         logger.warning("intraday-check: no rates in DB — nothing to check")
         return
 
-    # Use configured routes if set; otherwise check every route in the DB
-    routes = routes_of_interest if routes_of_interest else list({r["route"] for r in latest_rates})
+    all_db_routes = list({r["route"] for r in latest_rates})
+
+    if routes_of_interest:
+        # Resolve config patterns to actual DB route names via case-insensitive
+        # substring matching so config entries like "US West Coast" match the
+        # scraped label "Shanghai → US West Coast".
+        resolved: list[str] = []
+        for pattern in routes_of_interest:
+            pat_lower = pattern.strip().lower()
+            matched = [r for r in all_db_routes if pat_lower in r.lower() or r.lower() in pat_lower]
+            if matched:
+                resolved.extend(matched)
+            else:
+                logger.debug("intraday-check: no DB route matched pattern '%s'", pattern)
+        routes = list(dict.fromkeys(resolved))  # dedupe, preserve order
+        if not routes:
+            logger.warning(
+                "intraday-check: routes_of_interest configured but none matched DB routes %s",
+                all_db_routes,
+            )
+    else:
+        routes = all_db_routes
+
     alerts_fired = 0
 
     for route in routes:

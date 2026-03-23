@@ -23,10 +23,14 @@ alert_thresholds:
 # Leave empty ([]) to monitor every route currently in the DB.
 # ---------------------------------------------------------------------------
 routes_of_interest:
-  - "Shanghai→Los Angeles"
-  - "Shanghai→Rotterdam"
-  - "New York→Rotterdam"
-  - "Shanghai→Genoa"
+  # Must match the route labels stored in the DB by the scrapers.
+  # SCFI uses "Shanghai → <destination>"; Freightos uses broad region labels.
+  # The intraday check does a case-insensitive substring match, so partial
+  # names work (e.g. "US West Coast" matches "Shanghai → US West Coast").
+  - "Shanghai → US West Coast"    # SCFI / Drewry WCI Shanghai→LA corridor
+  - "Shanghai → Europe"           # SCFI Europe composite
+  - "Shanghai → Mediterranean"    # SCFI Mediterranean (Genoa corridor)
+  - "Europe → North America East Coast"  # Freightos FBX05 (NY↔Rotterdam)
 
 # ---------------------------------------------------------------------------
 # Timezone used for display / log labels (does not affect cron schedule,

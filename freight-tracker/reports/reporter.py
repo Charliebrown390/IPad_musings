@@ -251,26 +251,27 @@ def _generate_executive_summary(signals_by_route: dict[str, dict[str, Any]]) -> 
 # Telegram delivery
 # ---------------------------------------------------------------------------
 
+def _escape_html(text: str) -> str:
+    """Escape the three characters reserved in Telegram HTML mode."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 async def _send_telegram_async(text: str, token: str, chat_id: str) -> None:
-    """Send *text* in ≤4 000-char chunks via the Telegram Bot API."""
+    """
+    Send *text* in ≤4 096-char chunks via the Telegram Bot API using HTML
+    parse mode.  HTML only reserves &, <, > — far safer than MarkdownV2 for
+    text that contains route names, decimal percentages, dates, and arrows.
+    """
     import telegram
 
     bot = telegram.Bot(token=token)
     async with bot:
-        for start in range(0, len(text), 4000):
+        for start in range(0, len(text), 4096):
             await bot.send_message(
                 chat_id=chat_id,
-                text=text[start : start + 4000],
-                parse_mode="MarkdownV2",
+                text=text[start : start + 4096],
+                parse_mode="HTML",
             )
-
-
-def _escape_md2(text: str) -> str:
-    """Escape characters reserved in Telegram MarkdownV2."""
-    reserved = r"\_*[]()~`>#+-=|{}.!"
-    for ch in reserved:
-        text = text.replace(ch, f"\\{ch}")
-    return text
 
 
 def _send_telegram(text: str) -> bool:
@@ -344,21 +345,20 @@ def generate_weekly_report(
     dated_path.write_text(report_md, encoding="utf-8")
     logger.info("Weekly report saved to %s", dated_path)
 
-    # 4. Telegram — prepend 🚨 header if urgent signals present
+    # 4. Telegram — use HTML parse mode (only &, <, > need escaping)
     urgent = _has_urgent_signal(signals_by_route)
-    tg_header = "🚨 *FREIGHT ALERT* — urgent signals detected\n\n" if urgent else ""
+    tg_header = "🚨 <b>FREIGHT ALERT</b> — urgent signals detected\n\n" if urgent else ""
 
-    # Build a condensed Telegram message (plain text, avoid MarkdownV2 escaping issues)
-    tg_lines = [f"{tg_header}*Freight Rate Report — {report_date}*", ""]
+    tg_lines = [f"{tg_header}<b>Freight Rate Report — {_escape_html(report_date)}</b>", ""]
     if ai_summary:
-        tg_lines += [ai_summary, ""]
-    tg_lines.append("*Route Signals:*")
+        tg_lines += [_escape_html(ai_summary), ""]
+    tg_lines.append("<b>Route Signals:</b>")
     for route, sig in signals_by_route.items():
-        label = _signal_label(sig).replace("🔴 ", "").replace("🟠 ", "").replace(
-            "🔵 ", ""
-        ).replace("🟡 ", "").replace("🟢 ", "")
+        label = _signal_label(sig)
         wow_str = f"{sig['wow_pct']:+.1f}%" if sig.get("wow_pct") is not None else "N/A"
-        tg_lines.append(f"• {route}: {label} ({wow_str} WoW)")
+        tg_lines.append(
+            f"• {_escape_html(route)}: {_escape_html(label)} ({_escape_html(wow_str)} WoW)"
+        )
 
     tg_text = "\n".join(tg_lines)
 
@@ -390,5 +390,10 @@ def generate_intraday_alert(
     logger.warning("ALERT [%s] %s: %s", alert_type, route, message)
 
     if notify:
-        tg_text = f"🚨 *FREIGHT ALERT*\nRoute: {route}\nType: {alert_type}\n\n{message}"
+        tg_text = (
+            f"🚨 <b>FREIGHT ALERT</b>\n"
+            f"Route: {_escape_html(route)}\n"
+            f"Type: {_escape_html(alert_type)}\n\n"
+            f"{_escape_html(message)}"
+        )
         _send_telegram(tg_text)
