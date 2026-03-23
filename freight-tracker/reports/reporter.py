@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import anthropic
+import httpx
 import pandas as pd
 import yaml
 
@@ -259,19 +260,18 @@ def _escape_html(text: str) -> str:
 async def _send_telegram_async(text: str, token: str, chat_id: str) -> None:
     """
     Send *text* in ≤4 096-char chunks via the Telegram Bot API using HTML
-    parse mode.  HTML only reserves &, <, > — far safer than MarkdownV2 for
-    text that contains route names, decimal percentages, dates, and arrows.
+    parse mode, driven by httpx (already a project dependency — avoids the
+    python-telegram-bot cryptography/cffi C-extension requirement).
     """
-    import telegram
-
-    bot = telegram.Bot(token=token)
-    async with bot:
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    async with httpx.AsyncClient(timeout=30) as client:
         for start in range(0, len(text), 4096):
-            await bot.send_message(
-                chat_id=chat_id,
-                text=text[start : start + 4096],
-                parse_mode="HTML",
+            chunk = text[start : start + 4096]
+            resp = await client.post(
+                url,
+                json={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"},
             )
+            resp.raise_for_status()
 
 
 def _send_telegram(text: str) -> bool:
