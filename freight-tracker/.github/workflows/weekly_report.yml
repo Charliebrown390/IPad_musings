@@ -82,25 +82,32 @@ jobs:
         run: python main.py --run-now
 
       # -----------------------------------------------------------------------
-      # 6. Commit the SQLite DB back to the repo so rate history persists
-      #    across runs without an external storage dependency.
+      # 6. Build the GitHub Pages static site from the generated reports
       # -----------------------------------------------------------------------
-      - name: Commit freight_rates.db back to repo
+      - name: Build GitHub Pages site
+        working-directory: freight-tracker
+        run: python -m pages.builder
+
+      # -----------------------------------------------------------------------
+      # 7. Commit the SQLite DB, reports, and Pages site back to the repo
+      # -----------------------------------------------------------------------
+      - name: Commit freight_rates.db, reports, and Pages site
         working-directory: freight-tracker
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Stage the DB and the latest report (if produced)
+          # Stage DB, reports, and the generated Pages site
           git add data/freight.db || true
           git add reports/output/  || true
+          git add ../docs/         || true
 
           # Only commit when there is something new
           if git diff --cached --quiet; then
-            echo "Nothing to commit — DB unchanged."
+            echo "Nothing to commit — no changes."
           else
             RUN_DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
-            git commit -m "chore: update freight DB and report [${RUN_DATE}] [skip ci]"
+            git commit -m "chore: update freight DB, report, and Pages site [${RUN_DATE}] [skip ci]"
             git push origin HEAD
           fi
 

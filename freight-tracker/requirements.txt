@@ -19,3 +19,6 @@ python-telegram-bot>=21.0
 
 # AI narrative (Anthropic SDK)
 anthropic>=0.28.0
+
+# GitHub Pages site builder
+Markdown>=3.5.0
