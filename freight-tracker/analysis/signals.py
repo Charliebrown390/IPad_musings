@@ -14,11 +14,12 @@ generate_weekly_signals()
 
 Signal types produced
 ---------------------
-- wow_pct          : week-on-week % change (latest week)
-- momentum         : "SPIKE" | "COOLING" | "STABLE"  (4-week rolling avg)
-- divergence       : "DIVERGENCE" | None  (FBX vs WCI >15% spread)
-- stress           : "STRESS" | None  (key EU routes >40% above 12W avg)
-- inflation_score  : 0–100 composite across all routes
+- wow_pct                        : week-on-week % change (latest week)
+- momentum                       : "SPIKE" | "COOLING" | "STABLE"  (4-week rolling avg)
+- divergence                     : "DIVERGENCE" | None  (FBX vs WCI >15% spread)
+- stress                         : "STRESS" | None  (key EU routes >40% above 12W avg)
+- inflation_score                : 0–100 composite (weighted, 52-week normalised)
+- inflationary_pressure_breakdown: per-component breakdown + optional warning
 """
 
 import logging
@@ -30,6 +31,7 @@ from database.db import (
     get_rate_history,
     get_cross_index_comparison,
     get_latest_rates,
+    get_input_cost_history,
     insert_signal,
 )
 
@@ -52,9 +54,26 @@ STRESS_ROUTES = {
     "SHANGHAI-GENOA",
 }
 
+# ---------------------------------------------------------------------------
+# Inflation score weights and indicator keys
+# ---------------------------------------------------------------------------
+_INFLATION_WEIGHTS: dict[str, float] = {
+    "bunker": 0.35,   # VLSFO 0.5% Singapore 4-week % change
+    "crude":  0.20,   # Brent crude 4-week % change
+    "rates":  0.25,   # freight rate composite 4-week % change
+    "bdi":    0.20,   # Baltic Dry Index 4-week % change
+}
+
+_BUNKER_INDICATOR = "VLSFO 0.5% - Singapore"
+_CRUDE_INDICATOR  = "Brent Crude"
+_BDI_INDICATOR    = "Baltic Dry Index"
+
+# History window for min-max normalization
+_NORM_WEEKS = 52
+
 
 # ---------------------------------------------------------------------------
-# Per-route signal helpers
+# Per-route signal helpers  (unchanged)
 # ---------------------------------------------------------------------------
 
 def _wow_pct_change(series: pd.Series) -> float | None:
@@ -172,21 +191,212 @@ def _divergence_flag(
     return label, round(fbx_rate, 2), round(wci_rate, 2)
 
 
-def _inflation_score(route_wow_pcts: list[float]) -> float:
-    """
-    Composite inflationary pressure score, normalised 0–100.
+# ---------------------------------------------------------------------------
+# Inflation score — component helpers
+# ---------------------------------------------------------------------------
 
-    Uses the mean of all positive WoW % changes, capped at 50 % for
-    normalisation (i.e. a 50 %+ average maps to a score of 100).
+def _fetch_input_cost_weekly(indicator: str, weeks: int = _NORM_WEEKS) -> pd.Series:
     """
-    if not route_wow_pcts:
-        return 0.0
-    positive = [p for p in route_wow_pcts if p > 0]
-    if not positive:
-        return 0.0
-    mean_positive = sum(positive) / len(positive)
-    score = min(mean_positive / 50.0 * 100, 100.0)
-    return round(score, 1)
+    Pull *indicator* rows from input_costs and resample to a weekly Series.
+    Returns an empty Series when data is absent or the DB read fails.
+    """
+    try:
+        rows = get_input_cost_history(indicator, weeks=weeks)
+    except Exception as exc:
+        logger.warning(
+            "inflation_score: DB read failed for indicator '%s': %s", indicator, exc
+        )
+        return pd.Series(dtype=float)
+
+    if not rows:
+        logger.debug("inflation_score: no data for indicator '%s'", indicator)
+        return pd.Series(dtype=float)
+
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"])
+    series = df.set_index("date")["value"].sort_index()
+    # Resample to weekly end-of-period to align with freight data cadence
+    return series.resample("W").last().dropna()
+
+
+def _fetch_freight_composite_weekly(weeks: int = _NORM_WEEKS) -> pd.Series:
+    """
+    Build a weekly composite freight rate series (mean across all routes and
+    indices) by pulling history for every route currently in the DB.
+    Returns an empty Series when no freight data is available.
+    """
+    try:
+        latest = get_latest_rates()
+    except Exception as exc:
+        logger.warning("inflation_score: could not fetch latest rates: %s", exc)
+        return pd.Series(dtype=float)
+
+    routes = list({r["route"] for r in latest})
+    if not routes:
+        return pd.Series(dtype=float)
+
+    all_rows: list[dict] = []
+    for route in routes:
+        try:
+            all_rows.extend(get_rate_history(route, weeks=weeks))
+        except Exception as exc:
+            logger.warning(
+                "inflation_score: rate_history fetch failed for route '%s': %s", route, exc
+            )
+
+    if not all_rows:
+        return pd.Series(dtype=float)
+
+    df = pd.DataFrame(all_rows)
+    df["week_ending"] = pd.to_datetime(df["week_ending"])
+    # Weekly mean across all routes and indices
+    weekly = df.groupby("week_ending")["rate_usd"].mean().sort_index()
+    weekly.index = weekly.index.to_period("W").to_timestamp("W")  # align to week-end
+    return weekly.dropna()
+
+
+def _4w_pct_change(series: pd.Series) -> float | None:
+    """
+    Compute the 4-period (4-week) % change using the most-recent values.
+    Requires at least 5 data points.
+    """
+    s = series.dropna().sort_index()
+    if len(s) < 5:
+        return None
+    base = s.iloc[-5]
+    curr = s.iloc[-1]
+    if base == 0:
+        return None
+    return round((curr - base) / base * 100, 4)
+
+
+def _rolling_4w_pct_changes(series: pd.Series) -> pd.Series:
+    """Full rolling series of 4-period % changes (used as the normalization window)."""
+    return series.pct_change(periods=4).mul(100).dropna()
+
+
+def _minmax_normalize(value: float, history: pd.Series) -> float:
+    """
+    Normalize *value* to 0–100 using the min/max of *history*.
+    Returns 50.0 when the range is zero (flat history — can't distinguish).
+    Clamps to [0, 100].
+    """
+    h = history.dropna()
+    if len(h) < 2:
+        return 50.0
+    lo, hi = float(h.min()), float(h.max())
+    if hi == lo:
+        return 50.0
+    normalized = (value - lo) / (hi - lo) * 100.0
+    return round(max(0.0, min(100.0, normalized)), 1)
+
+
+# ---------------------------------------------------------------------------
+# Inflation score — composite computation
+# ---------------------------------------------------------------------------
+
+def _compute_inflation_score() -> dict[str, Any]:
+    """
+    Weighted inflationary pressure score with per-component breakdown.
+
+    Each component is:
+      1. Expressed as a 4-week % change
+      2. Normalised 0–100 against the 52-week rolling min-max of that
+         same 4-week % change series
+      3. Weighted and summed into a composite 0–100 score
+
+    If a component's data is absent (e.g. BDI not yet scraped), its weight
+    is redistributed proportionally across the available components.
+
+    Returns
+    -------
+    dict with keys:
+        bunker_fuel_component : float | None
+        crude_component       : float | None
+        rate_component        : float | None
+        bdi_component         : float | None
+        composite_score       : float
+        warning               : str | None  ("COST SQUEEZE INCOMING" when applicable)
+    """
+    # ------------------------------------------------------------------
+    # 1. Fetch weekly series for each component
+    # ------------------------------------------------------------------
+    bunker_series  = _fetch_input_cost_weekly(_BUNKER_INDICATOR)
+    crude_series   = _fetch_input_cost_weekly(_CRUDE_INDICATOR)
+    freight_series = _fetch_freight_composite_weekly()
+    bdi_series     = _fetch_input_cost_weekly(_BDI_INDICATOR)
+
+    # ------------------------------------------------------------------
+    # 2. Compute 4-week % change and 52-week normalised score per component
+    # ------------------------------------------------------------------
+    def _score_series(series: pd.Series, label: str) -> float | None:
+        current_4w = _4w_pct_change(series)
+        if current_4w is None:
+            logger.debug("inflation_score: insufficient data for component '%s'", label)
+            return None
+        norm_history = _rolling_4w_pct_changes(series)
+        # Include the current value in the normalization window
+        norm_history = pd.concat(
+            [norm_history, pd.Series([current_4w])], ignore_index=True
+        )
+        return _minmax_normalize(current_4w, norm_history)
+
+    components: dict[str, float | None] = {
+        "bunker": _score_series(bunker_series,  "bunker"),
+        "crude":  _score_series(crude_series,   "crude"),
+        "rates":  _score_series(freight_series, "rates"),
+        "bdi":    _score_series(bdi_series,     "bdi"),
+    }
+
+    # ------------------------------------------------------------------
+    # 3. Composite — redistribute weights for missing components
+    # ------------------------------------------------------------------
+    available = {k: v for k, v in components.items() if v is not None}
+
+    if not available:
+        composite = 0.0
+        logger.warning(
+            "inflation_score: no component data available; returning score=0"
+        )
+    else:
+        total_weight = sum(_INFLATION_WEIGHTS[k] for k in available)
+        composite = sum(
+            v * (_INFLATION_WEIGHTS[k] / total_weight)
+            for k, v in available.items()
+        )
+        composite = round(composite, 1)
+
+        missing = set(_INFLATION_WEIGHTS) - set(available)
+        if missing:
+            logger.info(
+                "inflation_score: components %s unavailable; weights redistributed",
+                sorted(missing),
+            )
+
+    # ------------------------------------------------------------------
+    # 4. Cost squeeze warning
+    # ------------------------------------------------------------------
+    bunker_val = components["bunker"]
+    rate_val   = components["rates"]
+    warning: str | None = None
+    if bunker_val is not None and rate_val is not None:
+        if bunker_val > 60 and rate_val < 30:
+            warning = "COST SQUEEZE INCOMING"
+            logger.warning(
+                "inflation_score: COST SQUEEZE INCOMING — "
+                "bunker_fuel_component=%.1f, rate_component=%.1f",
+                bunker_val,
+                rate_val,
+            )
+
+    return {
+        "bunker_fuel_component": bunker_val,
+        "crude_component":       components["crude"],
+        "rate_component":        rate_val,
+        "bdi_component":         components["bdi"],
+        "composite_score":       composite,
+        "warning":               warning,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -208,16 +418,17 @@ def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
     dict[route_str, signal_dict]
 
     Each signal_dict contains:
-        wow_pct          : float | None   — week-on-week % change
-        momentum         : "SPIKE" | "COOLING" | "STABLE"
-        momentum_vs_4w   : float | None   — % vs 4-week rolling avg
-        divergence       : "DIVERGENCE" | None
-        fbx_rate         : float | None   — latest FBX rate for route
-        wci_rate         : float | None   — latest WCI rate for route
-        stress           : "STRESS" | None
-        stress_pct_above : float | None   — % above 12-week avg (stress routes)
-        inflation_score  : float          — 0–100 composite (same value for all routes)
-        four_week_avg    : float | None   — 4-week rolling average of rate_usd
+        wow_pct                        : float | None
+        momentum                       : "SPIKE" | "COOLING" | "STABLE"
+        momentum_vs_4w                 : float | None
+        divergence                     : "DIVERGENCE" | None
+        fbx_rate                       : float | None
+        wci_rate                       : float | None
+        stress                         : "STRESS" | None
+        stress_pct_above               : float | None
+        inflation_score                : float   — composite 0–100
+        four_week_avg                  : float | None
+        inflationary_pressure_breakdown: dict    — per-component scores + warning
     """
     if df.empty:
         logger.warning("generate_signals: received empty DataFrame")
@@ -234,7 +445,6 @@ def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
 
     routes = df["route"].unique().tolist()
     results: dict[str, dict[str, Any]] = {}
-    wow_pcts_all: list[float] = []
 
     for route in routes:
         route_df = df[df["route"] == route]
@@ -248,8 +458,6 @@ def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
 
         # 1. Week-on-week % change
         wow = _wow_pct_change(agg_series)
-        if wow is not None:
-            wow_pcts_all.append(wow)
 
         # 2. Momentum label (4-week rolling avg vs current)
         momentum, momentum_vs_4w = _momentum_label(agg_series)
@@ -265,27 +473,32 @@ def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
         stress_label, stress_pct = _stress_flag(route, agg_series)
 
         results[route] = {
-            "wow_pct": wow,
-            "momentum": momentum,
-            "momentum_vs_4w": momentum_vs_4w,
-            "divergence": div_label,
-            "fbx_rate": fbx_rate,
-            "wci_rate": wci_rate,
-            "stress": stress_label,
+            "wow_pct":          wow,
+            "momentum":         momentum,
+            "momentum_vs_4w":   momentum_vs_4w,
+            "divergence":       div_label,
+            "fbx_rate":         fbx_rate,
+            "wci_rate":         wci_rate,
+            "stress":           stress_label,
             "stress_pct_above": stress_pct,
-            "inflation_score": 0.0,   # back-filled below after all routes processed
-            "four_week_avg": four_week_avg,
+            "inflation_score":  0.0,   # back-filled below
+            "four_week_avg":    four_week_avg,
+            "inflationary_pressure_breakdown": {},  # back-filled below
         }
 
-    # 5. Inflationary pressure score (same value for every route — portfolio-level)
-    score = _inflation_score(wow_pcts_all)
+    # 5. Inflationary pressure score — portfolio-level, same for all routes
+    breakdown = _compute_inflation_score()
+    composite  = breakdown["composite_score"]
+
     for route in results:
-        results[route]["inflation_score"] = score
+        results[route]["inflation_score"] = composite
+        results[route]["inflationary_pressure_breakdown"] = breakdown
 
     logger.info(
-        "generate_signals: processed %d routes, inflation_score=%.1f",
+        "generate_signals: processed %d routes | inflation_score=%.1f%s",
         len(results),
-        score,
+        composite,
+        " | ⚠ COST SQUEEZE INCOMING" if breakdown.get("warning") else "",
     )
     return results
 
@@ -328,13 +541,26 @@ def generate_weekly_signals(
         route_rows = [r for r in all_rows if r["route"] == route]
         week_ending = max(r["week_ending"] for r in route_rows) if route_rows else ""
 
+        breakdown = sig.get("inflationary_pressure_breakdown", {})
+
         # Persist each non-None signal label
         for signal_type, value, notes in [
-            ("wow_pct", sig["wow_pct"], f"WoW change: {sig['wow_pct']}%"),
-            ("momentum", sig["momentum"], f"vs 4W avg: {sig['momentum_vs_4w']}%"),
-            ("divergence", sig["divergence"], f"FBX={sig['fbx_rate']} WCI={sig['wci_rate']}"),
-            ("stress", sig["stress"], f"{sig['stress_pct_above']}% above 12W avg"),
-            ("inflation_score", sig["inflation_score"], f"Composite score: {sig['inflation_score']}"),
+            ("wow_pct",        sig["wow_pct"],        f"WoW change: {sig['wow_pct']}%"),
+            ("momentum",       sig["momentum"],        f"vs 4W avg: {sig['momentum_vs_4w']}%"),
+            ("divergence",     sig["divergence"],      f"FBX={sig['fbx_rate']} WCI={sig['wci_rate']}"),
+            ("stress",         sig["stress"],          f"{sig['stress_pct_above']}% above 12W avg"),
+            ("inflation_score",sig["inflation_score"], f"Composite score: {sig['inflation_score']}"),
+            (
+                "inflation_breakdown",
+                breakdown.get("composite_score"),
+                (
+                    f"bunker={breakdown.get('bunker_fuel_component')} "
+                    f"crude={breakdown.get('crude_component')} "
+                    f"rates={breakdown.get('rate_component')} "
+                    f"bdi={breakdown.get('bdi_component')}"
+                    + (f" | {breakdown['warning']}" if breakdown.get("warning") else "")
+                ),
+            ),
         ]:
             if value is None:
                 continue
@@ -351,14 +577,15 @@ def generate_weekly_signals(
 
             flat.append(
                 {
-                    "route": route,
+                    "route":       route,
                     "signal_type": signal_type,
-                    "value": value,
+                    "value":       value,
                     "week_ending": week_ending,
-                    "notes": notes,
+                    "notes":       notes,
                     **{k: sig[k] for k in sig if k != signal_type},
                 }
             )
 
     logger.info("generate_weekly_signals: persisted signals for %d routes", len(signals_by_route))
     return flat
+

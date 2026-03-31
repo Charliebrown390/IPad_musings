@@ -168,9 +168,29 @@ def _build_markdown_report(
         (s.get("inflation_score") for s in signals_by_route.values() if s.get("inflation_score") is not None),
         None,
     )
+    breakdown = next(
+        (s.get("inflationary_pressure_breakdown") for s in signals_by_route.values()
+         if s.get("inflationary_pressure_breakdown")),
+        None,
+    )
     if inflation_score is not None:
+        lines += [f"**Inflationary Pressure Score: {inflation_score:.0f} / 100**", ""]
+
+    if breakdown:
+        warning = breakdown.get("warning")
+        if warning:
+            lines += [f"⚠️ **{warning}** — input costs rising faster than freight rates", ""]
+
+        def _fmt_component(val: float | None) -> str:
+            return f"{val:.0f}" if val is not None else "N/A"
+
         lines += [
-            f"**Inflationary Pressure Score: {inflation_score:.0f} / 100**",
+            "| Component | Score (0–100) | Weight |",
+            "|-----------|--------------|--------|",
+            f"| Bunker Fuel (VLSFO Singapore 4W Δ) | {_fmt_component(breakdown.get('bunker_fuel_component'))} | 35% |",
+            f"| Brent Crude (4W Δ)                 | {_fmt_component(breakdown.get('crude_component'))} | 20% |",
+            f"| Freight Rate Composite (4W Δ)       | {_fmt_component(breakdown.get('rate_component'))} | 25% |",
+            f"| Baltic Dry Index (4W Δ)             | {_fmt_component(breakdown.get('bdi_component'))} | 20% |",
             "",
         ]
 
