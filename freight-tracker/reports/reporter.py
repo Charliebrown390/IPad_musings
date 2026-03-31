@@ -276,9 +276,12 @@ def _build_signal_summary_text(signals_by_route: dict[str, dict[str, Any]]) -> s
     return "\n".join(lines)
 
 
-def _generate_executive_summary(signals_by_route: dict[str, dict[str, Any]]) -> str | None:
+def _generate_executive_summary(
+    signals_by_route: dict[str, dict[str, Any]],
+    news_signal: dict[str, Any] | None = None,
+) -> str | None:
     """
-    Call claude-haiku-4-5-20251001 to produce a 3-sentence executive summary.
+    Call claude-haiku-4-5-20251001 to produce a detailed executive summary.
     Returns None if ANTHROPIC_API_KEY is unset or the call fails.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -286,26 +289,72 @@ def _generate_executive_summary(signals_by_route: dict[str, dict[str, Any]]) -> 
         logger.info("ANTHROPIC_API_KEY not set — skipping executive summary")
         return None
 
-    signal_text = _build_signal_summary_text(signals_by_route)
+    # --- {signals} block ---
+    signals_text = _build_signal_summary_text(signals_by_route)
+
+    # --- {inflation_breakdown} block ---
+    breakdown = next(
+        (s.get("inflationary_pressure_breakdown")
+         for s in signals_by_route.values()
+         if s.get("inflationary_pressure_breakdown")),
+        {},
+    )
+
+    def _fmt(v: float | None) -> str:
+        return f"{v:.1f}" if v is not None else "N/A"
+
+    inflation_breakdown_text = (
+        f"bunker_fuel_component={_fmt(breakdown.get('bunker_fuel_component'))}/100  "
+        f"crude_component={_fmt(breakdown.get('crude_component'))}/100  "
+        f"rate_component={_fmt(breakdown.get('rate_component'))}/100  "
+        f"bdi_component={_fmt(breakdown.get('bdi_component'))}/100  "
+        f"composite={_fmt(breakdown.get('composite_score'))}/100"
+    )
+
+    # --- {bunker_change} ---
+    # Normalised 0-100 pressure score for bunker (higher = more pressure)
+    bunker_change = _fmt(breakdown.get("bunker_fuel_component"))
+
+    # --- {news_signals} block ---
+    if news_signal:
+        key_events = "; ".join(news_signal.get("key_events") or []) or "none detected"
+        news_text = (
+            f"geopolitical_risk={_fmt(news_signal.get('geopolitical_score'))}/100  "
+            f"labour_disruption={_fmt(news_signal.get('labour_score'))}/100  "
+            f"port_congestion={_fmt(news_signal.get('port_score'))}/100  "
+            f"key_events=[{key_events}]"
+        )
+    else:
+        news_text = "not available"
+
+    # --- {cost_squeeze_flag} ---
+    cost_squeeze_flag = bool(breakdown.get("warning") == "COST SQUEEZE INCOMING")
+
+    prompt = (
+        "You are a freight market analyst writing for an insurance investment "
+        "team managing fixed income and multi-asset portfolios.\n\n"
+        "Given:\n"
+        f"- Freight rate signals: {signals_text}\n"
+        f"- Inflationary pressure breakdown: {inflation_breakdown_text}\n"
+        f"- Bunker fuel 4W change: {bunker_change}%\n"
+        f"- News sentiment scores: {news_text}\n"
+        f"- COST SQUEEZE WARNING active: {cost_squeeze_flag}\n\n"
+        "Write a detailed executive summary covering:\n"
+        "(1) demand trends by region,\n"
+        "(2) inflationary cost pressures distinguishing between input costs "
+        "already materialised vs those not yet passed through to rates,\n"
+        "(3) geopolitical and labour route risk,\n"
+        "(4) one actionable implication for an insurance investment portfolio "
+        "(e.g. implications for inflation assumptions, credit exposure to "
+        "shipping sector, or reinsurance cost outlook)."
+    )
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=300,
-            system="You are a freight market analyst writing for an insurance investment team.",
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        f"Given these shipping rate signals:\n\n{signal_text}\n\n"
-                        "Write a 3-sentence executive summary covering: "
-                        "(1) demand trends, "
-                        "(2) inflationary cost pressures from fuel and logistics, "
-                        "(3) geopolitical route risk."
-                    ),
-                }
-            ],
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
         )
         return message.content[0].text.strip()
     except anthropic.APIStatusError as exc:
@@ -409,7 +458,7 @@ def generate_weekly_report(
     report_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     # 1. AI executive summary
-    ai_summary = _generate_executive_summary(signals_by_route)
+    ai_summary = _generate_executive_summary(signals_by_route, news_signal=news_signal)
 
     # 2. Markdown report
     report_md = _build_markdown_report(
