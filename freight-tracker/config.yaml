@@ -12,6 +12,8 @@ scrapers:
   # Input cost scrapers — run separately via --input-costs
   bunker: true
   crude: true
+  # News sentiment — runs inside --run-now (requires ANTHROPIC_API_KEY)
+  news_sentiment: true
 
 # ---------------------------------------------------------------------------
 # Alert thresholds

@@ -75,9 +75,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 from scrapers import scrape_drewry, scrape_freightos, scrape_scfi, scrape_bunker, scrape_crude  # noqa: E402
+from scrapers.news_sentiment import scrape_news_sentiment                                       # noqa: E402
 from database.db import (  # noqa: E402
     init_db, insert_rates, get_latest_rates, get_rate_history,
-    insert_input_costs,
+    insert_input_costs, insert_news_signal,
 )
 from analysis.signals import generate_signals, generate_weekly_signals      # noqa: E402
 from reports.reporter import generate_weekly_report, generate_intraday_alert  # noqa: E402
@@ -173,10 +174,26 @@ def run_now(config: dict) -> None:
         spike_threshold=config.get("alert_thresholds", {}).get("wow_pct", 10.0)
     )
 
-    # 3. Build report + send Telegram
+    # 3. News sentiment analysis
+    news_signal = None
+    if config.get("scrapers", {}).get("news_sentiment", True):
+        logger.info("[%s] Starting scraper: news_sentiment",
+                    datetime.now(timezone.utc).isoformat())
+        try:
+            news_signal = scrape_news_sentiment()
+            if news_signal:
+                insert_news_signal(news_signal)
+        except Exception as exc:
+            logger.error("[%s] news_sentiment scraper failed: %s",
+                         datetime.now(timezone.utc).isoformat(), exc, exc_info=True)
+    else:
+        logger.info("Scraper 'news_sentiment' disabled — skipping")
+
+    # 4. Build report + send Telegram
     report_path = generate_weekly_report(
         signals_by_route=signals_by_route,
         latest_rates=latest_rates,
+        news_signal=news_signal,
     )
     logger.info("=== run-now: complete. Report → %s ===", report_path)
 

@@ -7,6 +7,7 @@ Tables
 - rate_signals      : derived trading / alert signals
 - alerts_log        : record of dispatched notifications
 - input_costs       : daily bunker fuel and crude oil prices
+- news_signals      : weekly news sentiment risk scores
 """
 
 import logging
@@ -69,6 +70,19 @@ CREATE TABLE IF NOT EXISTS input_costs (
 );
 """
 
+DDL_NEWS_SIGNALS = """
+CREATE TABLE IF NOT EXISTS news_signals (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    date                 TEXT    NOT NULL,   -- ISO date YYYY-MM-DD
+    geopolitical_score   REAL    NOT NULL,   -- 0-100
+    labour_score         REAL    NOT NULL,   -- 0-100
+    port_score           REAL    NOT NULL,   -- 0-100
+    key_events_json      TEXT    NOT NULL,   -- JSON array of strings
+    affected_routes_json TEXT    NOT NULL,   -- JSON array of strings
+    scraped_at           TEXT    NOT NULL    -- ISO datetime UTC
+);
+"""
+
 DDL_INDICES = [
     "CREATE INDEX IF NOT EXISTS idx_fr_route       ON freight_rates (route);",
     "CREATE INDEX IF NOT EXISTS idx_fr_index_name  ON freight_rates (index_name);",
@@ -77,6 +91,7 @@ DDL_INDICES = [
     "CREATE INDEX IF NOT EXISTS idx_al_route       ON alerts_log    (route);",
     "CREATE INDEX IF NOT EXISTS idx_ic_indicator   ON input_costs   (indicator_name);",
     "CREATE INDEX IF NOT EXISTS idx_ic_date        ON input_costs   (date);",
+    "CREATE INDEX IF NOT EXISTS idx_ns_date        ON news_signals  (date);",
 ]
 
 
@@ -111,6 +126,7 @@ def init_db(db_path: Path | None = None) -> Path:
         conn.execute(DDL_RATE_SIGNALS)
         conn.execute(DDL_ALERTS_LOG)
         conn.execute(DDL_INPUT_COSTS)
+        conn.execute(DDL_NEWS_SIGNALS)
         for idx_sql in DDL_INDICES:
             conn.execute(idx_sql)
         conn.commit()
@@ -407,6 +423,84 @@ def get_input_cost_history(
         ).fetchall()
 
     return [dict(r) for r in rows]
+
+
+def insert_news_signal(
+    record: dict[str, Any],
+    db_path: Path | None = None,
+) -> bool:
+    """
+    Insert a news sentiment record into *news_signals*.
+
+    Skips if a row already exists for the same date (one record per day).
+
+    Parameters
+    ----------
+    record : dict
+        Must contain keys matching the scraper output:
+        date, geopolitical_score, labour_score, port_score,
+        key_events (list), affected_routes (list), scraped_at
+
+    Returns
+    -------
+    bool: True when a new row was inserted, False when skipped.
+    """
+    import json as _json
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news_signals
+                (date, geopolitical_score, labour_score, port_score,
+                 key_events_json, affected_routes_json, scraped_at)
+            SELECT ?, ?, ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (
+                SELECT 1 FROM news_signals WHERE date = ?
+            )
+            """,
+            (
+                record["date"],
+                record["geopolitical_score"],
+                record["labour_score"],
+                record["port_score"],
+                _json.dumps(record.get("key_events") or []),
+                _json.dumps(record.get("affected_routes") or []),
+                record["scraped_at"],
+                record["date"],
+            ),
+        )
+        inserted = conn.execute("SELECT changes()").fetchone()[0]
+
+    if inserted:
+        logger.info("insert_news_signal: inserted record for date=%s", record["date"])
+    else:
+        logger.info("insert_news_signal: skipped duplicate for date=%s", record["date"])
+    return bool(inserted)
+
+
+def get_latest_news_signal(
+    db_path: Path | None = None,
+) -> dict[str, Any] | None:
+    """
+    Return the most-recent news sentiment record, with JSON columns
+    decoded back to Python lists.
+
+    Returns None when the table is empty.
+    """
+    import json as _json
+
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM news_signals ORDER BY date DESC, id DESC LIMIT 1"
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    result = dict(row)
+    result["key_events"]      = _json.loads(result.pop("key_events_json",      "[]"))
+    result["affected_routes"] = _json.loads(result.pop("affected_routes_json", "[]"))
+    return result
 
 
 def get_cross_index_comparison(

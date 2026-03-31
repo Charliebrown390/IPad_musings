@@ -27,7 +27,7 @@ import httpx
 import pandas as pd
 import yaml
 
-from database.db import get_latest_rates, get_rate_history, insert_alert
+from database.db import get_latest_rates, get_rate_history, insert_alert, get_latest_news_signal
 
 logger = logging.getLogger(__name__)
 
@@ -140,11 +140,55 @@ def _build_summary_table(
     return "\n".join(rows)
 
 
+def _build_news_sentiment_section(news: dict[str, Any]) -> list[str]:
+    """
+    Build the News Sentiment Risk markdown block from a news_signals record.
+    Returns a list of lines (no trailing blank line — caller adds spacing).
+    """
+    geo   = news.get("geopolitical_score",  0.0)
+    lab   = news.get("labour_score",         0.0)
+    port  = news.get("port_score",           0.0)
+    events         = news.get("key_events",      []) or []
+    affected_routes = news.get("affected_routes", []) or []
+
+    def _risk_label(score: float) -> str:
+        if score >= 70:
+            return "🔴 HIGH"
+        if score >= 40:
+            return "🟠 MODERATE"
+        return "🟢 LOW"
+
+    lines = [
+        "## News Sentiment Risk",
+        "",
+        "| Risk Category | Score (0–100) | Level |",
+        "|---------------|:-------------:|-------|",
+        f"| Geopolitical Risk      | {geo:.0f} | {_risk_label(geo)} |",
+        f"| Labour Disruption Risk | {lab:.0f} | {_risk_label(lab)} |",
+        f"| Port Congestion Risk   | {port:.0f} | {_risk_label(port)} |",
+        "",
+    ]
+
+    if events:
+        lines.append("**Key Events Detected:**")
+        lines.extend(f"- {e}" for e in events[:3])
+        lines.append("")
+
+    if affected_routes:
+        lines.append(
+            "**Routes at Risk:** " + " · ".join(affected_routes)
+        )
+        lines.append("")
+
+    return lines
+
+
 def _build_markdown_report(
     latest_rates: list[dict],
     signals_by_route: dict[str, dict[str, Any]],
     ai_summary: str | None,
     report_date: str,
+    news_signal: dict[str, Any] | None = None,
 ) -> str:
     urgent = _has_urgent_signal(signals_by_route)
     header_flag = "🚨 " if urgent else ""
@@ -193,6 +237,10 @@ def _build_markdown_report(
             f"| Baltic Dry Index (4W Δ)             | {_fmt_component(breakdown.get('bdi_component'))} | 20% |",
             "",
         ]
+
+    if news_signal:
+        lines += _build_news_sentiment_section(news_signal)
+        lines += ["---", ""]
 
     lines += [
         "## Rate Summary",
@@ -322,6 +370,7 @@ def _send_telegram(text: str) -> bool:
 def generate_weekly_report(
     signals_by_route: dict[str, dict[str, Any]] | None = None,
     latest_rates: list[dict] | None = None,
+    news_signal: dict[str, Any] | None = None,
 ) -> Path:
     """
     Build the weekly Markdown report, call the Anthropic API for an executive
@@ -334,6 +383,9 @@ def generate_weekly_report(
         is used (report will have N/A signal columns).
     latest_rates : list[dict], optional
         Pre-fetched latest rates. If None, fetched from the DB.
+    news_signal : dict, optional
+        Output of scrape_news_sentiment() (or get_latest_news_signal()).
+        If None, the News Sentiment Risk section is omitted from the report.
 
     Returns
     -------
@@ -347,6 +399,13 @@ def generate_weekly_report(
     if signals_by_route is None:
         signals_by_route = {}
 
+    # Fall back to the most-recent stored signal when none is passed in
+    if news_signal is None:
+        try:
+            news_signal = get_latest_news_signal()
+        except Exception as exc:
+            logger.warning("generate_weekly_report: could not fetch news signal: %s", exc)
+
     report_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     # 1. AI executive summary
@@ -358,6 +417,7 @@ def generate_weekly_report(
         signals_by_route=signals_by_route,
         ai_summary=ai_summary,
         report_date=report_date,
+        news_signal=news_signal,
     )
 
     # 3. Save dated copy
