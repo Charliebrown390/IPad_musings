@@ -32,6 +32,7 @@ Flags
 import argparse
 import logging
 import logging.handlers
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -40,6 +41,18 @@ from typing import Any
 
 import pandas as pd
 import yaml
+
+# Load .env from the project root (safe no-op if file absent or dotenv missing)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent / ".env")
+except ImportError:
+    _env_path = Path(__file__).parent / ".env"
+    if _env_path.exists():
+        for _line in _env_path.read_text().splitlines():
+            if _line.strip() and not _line.startswith("#") and "=" in _line:
+                _k, _v = _line.split("=", 1)
+                os.environ.setdefault(_k.strip(), _v.strip())
 
 # ---------------------------------------------------------------------------
 # Logging — must be configured before any project imports so that module-level
