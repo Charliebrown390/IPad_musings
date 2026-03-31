@@ -1,0 +1,104 @@
+name: Daily Input Cost Prices
+
+# Daily 23:00 UTC = 07:00 SGT (next morning)
+# Fetches VLSFO 0.5% bunker prices (Rotterdam, Singapore, Houston)
+# and Brent/WTI crude from yfinance, then commits updated DB back to repo.
+
+on:
+  schedule:
+    - cron: "0 23 * * *"
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: "Enable verbose Python logging"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: write   # needed for the DB commit-back step
+
+env:
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  TZ: "Asia/Singapore"
+
+jobs:
+  input-costs:
+    name: Fetch Bunker & Crude Prices → Commit DB
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Checkout
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # 2. Python 3.11
+      # -----------------------------------------------------------------------
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: freight-tracker/requirements.txt
+
+      # -----------------------------------------------------------------------
+      # 3. Dependencies  (no Playwright needed — no JS scraping here)
+      # -----------------------------------------------------------------------
+      - name: Install Python dependencies
+        working-directory: freight-tracker
+        run: pip install -r requirements.txt
+
+      # -----------------------------------------------------------------------
+      # 4. Ensure runtime directories exist
+      # -----------------------------------------------------------------------
+      - name: Create runtime directories
+        working-directory: freight-tracker
+        run: mkdir -p data
+
+      # -----------------------------------------------------------------------
+      # 5. Fetch bunker and crude prices
+      # -----------------------------------------------------------------------
+      - name: Fetch input cost prices
+        working-directory: freight-tracker
+        env:
+          PYTHONVERBOSE: ${{ github.event.inputs.debug == 'true' && '1' || '' }}
+        run: python main.py --input-costs
+
+      # -----------------------------------------------------------------------
+      # 6. Commit updated DB back to repo
+      # -----------------------------------------------------------------------
+      - name: Commit freight.db back to repo
+        working-directory: freight-tracker
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add data/freight.db || true
+
+          if git diff --cached --quiet; then
+            echo "Nothing to commit — DB unchanged."
+          else
+            RUN_DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
+            git commit -m "chore: update input costs DB [${RUN_DATE}] [skip ci]"
+            git push origin HEAD
+          fi
+
+      # -----------------------------------------------------------------------
+      # 7. Upload logs on failure
+      # -----------------------------------------------------------------------
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: input-costs-logs-${{ github.run_id }}
+          path: freight-tracker/scraper.log
+          retention-days: 14

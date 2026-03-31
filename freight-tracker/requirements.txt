@@ -22,3 +22,6 @@ anthropic>=0.28.0
 
 # GitHub Pages site builder
 Markdown>=3.5.0
+
+# Crude oil price feed
+yfinance>=0.2.40

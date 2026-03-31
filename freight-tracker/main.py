@@ -6,6 +6,7 @@ Usage
     python main.py --run-now          # full weekly pipeline
     python main.py --intraday-check   # DB-only WoW spike check
     python main.py --backfill         # scrape + store, no Telegram
+    python main.py --input-costs      # fetch bunker + crude prices
 
 Flags
 -----
@@ -21,6 +22,11 @@ Flags
 --backfill
     Runs all scrapers and stores results in the DB. Does not compute
     signals or send any Telegram messages. Useful for seeding history.
+
+--input-costs
+    Fetches daily bunker fuel (VLSFO 0.5% Rotterdam/Singapore/Houston)
+    and crude oil (Brent, WTI) prices and stores them in the input_costs
+    DB table. Runs independently of the weekly freight pipeline.
 """
 
 import argparse
@@ -68,8 +74,11 @@ logger = logging.getLogger(__name__)
 # Project imports
 # ---------------------------------------------------------------------------
 
-from scrapers import scrape_drewry, scrape_freightos, scrape_scfi          # noqa: E402
-from database.db import init_db, insert_rates, get_latest_rates, get_rate_history  # noqa: E402
+from scrapers import scrape_drewry, scrape_freightos, scrape_scfi, scrape_bunker, scrape_crude  # noqa: E402
+from database.db import (  # noqa: E402
+    init_db, insert_rates, get_latest_rates, get_rate_history,
+    insert_input_costs,
+)
 from analysis.signals import generate_signals, generate_weekly_signals      # noqa: E402
 from reports.reporter import generate_weekly_report, generate_intraday_alert  # noqa: E402
 
@@ -288,6 +297,62 @@ def backfill(config: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Mode: --input-costs
+# ---------------------------------------------------------------------------
+
+def input_costs(config: dict) -> None:
+    """
+    Fetch daily bunker and crude prices and store them in *input_costs*.
+
+    Bunker  → VLSFO 0.5% for Rotterdam, Singapore, Houston (USD/MT)
+    Crude   → Brent and WTI front-month futures close (USD/bbl)
+    """
+    logger.info("=== input-costs: fetching bunker and crude prices ===")
+    enabled = config.get("scrapers", {})
+    records: list[dict] = []
+
+    if enabled.get("bunker", True):
+        logger.info("[%s] Starting scraper: bunker", datetime.now(timezone.utc).isoformat())
+        try:
+            for r in scrape_bunker():
+                records.append({
+                    "indicator_name": f"{r['fuel_type']} - {r['port']}",
+                    "value":          r["price_usd_per_mt"],
+                    "unit":           "USD/MT",
+                    "date":           r["date"],
+                    "source":         r["source_url"],
+                })
+        except Exception as exc:
+            logger.error("[%s] bunker scraper failed: %s",
+                         datetime.now(timezone.utc).isoformat(), exc, exc_info=True)
+    else:
+        logger.info("Scraper 'bunker' disabled — skipping")
+
+    if enabled.get("crude", True):
+        logger.info("[%s] Starting scraper: crude", datetime.now(timezone.utc).isoformat())
+        try:
+            for r in scrape_crude():
+                records.append({
+                    "indicator_name": r["commodity"],
+                    "value":          r["price_usd"],
+                    "unit":           "USD/bbl",
+                    "date":           r["date"],
+                    "source":         r["source"],
+                })
+        except Exception as exc:
+            logger.error("[%s] crude scraper failed: %s",
+                         datetime.now(timezone.utc).isoformat(), exc, exc_info=True)
+    else:
+        logger.info("Scraper 'crude' disabled — skipping")
+
+    inserted = insert_input_costs(records)
+    logger.info(
+        "=== input-costs: complete. %d fetched, %d new inserts ===",
+        len(records), inserted,
+    )
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -319,6 +384,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Scrape and store without sending any notifications",
     )
+    group.add_argument(
+        "--input-costs",
+        action="store_true",
+        help="Fetch daily bunker fuel and crude oil prices into input_costs table",
+    )
 
     return parser.parse_args()
 
@@ -328,9 +398,15 @@ def main() -> None:
     config = _load_config()
 
     logger.info("=" * 60)
+    mode = (
+        "run-now"      if args.run_now       else
+        "intraday-check" if args.intraday_check else
+        "input-costs"  if args.input_costs   else
+        "backfill"
+    )
     logger.info(
         "Freight Tracker | %s | UTC %s",
-        "run-now" if args.run_now else "intraday-check" if args.intraday_check else "backfill",
+        mode,
         datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
     )
     logger.info("=" * 60)
@@ -342,6 +418,8 @@ def main() -> None:
         run_now(config)
     elif args.intraday_check:
         intraday_check(config)
+    elif args.input_costs:
+        input_costs(config)
     else:
         backfill(config)
 

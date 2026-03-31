@@ -6,6 +6,7 @@ Tables
 - freight_rates     : raw scraped rate data
 - rate_signals      : derived trading / alert signals
 - alerts_log        : record of dispatched notifications
+- input_costs       : daily bunker fuel and crude oil prices
 """
 
 import logging
@@ -57,12 +58,25 @@ CREATE TABLE IF NOT EXISTS alerts_log (
 );
 """
 
+DDL_INPUT_COSTS = """
+CREATE TABLE IF NOT EXISTS input_costs (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    indicator_name TEXT    NOT NULL,   -- e.g. 'VLSFO 0.5% - Rotterdam', 'Brent Crude'
+    value          REAL    NOT NULL,
+    unit           TEXT    NOT NULL,   -- e.g. 'USD/MT', 'USD/bbl'
+    date           TEXT    NOT NULL,   -- ISO date YYYY-MM-DD
+    source         TEXT    NOT NULL
+);
+"""
+
 DDL_INDICES = [
     "CREATE INDEX IF NOT EXISTS idx_fr_route       ON freight_rates (route);",
     "CREATE INDEX IF NOT EXISTS idx_fr_index_name  ON freight_rates (index_name);",
     "CREATE INDEX IF NOT EXISTS idx_fr_week_ending ON freight_rates (week_ending);",
     "CREATE INDEX IF NOT EXISTS idx_rs_route       ON rate_signals  (route);",
     "CREATE INDEX IF NOT EXISTS idx_al_route       ON alerts_log    (route);",
+    "CREATE INDEX IF NOT EXISTS idx_ic_indicator   ON input_costs   (indicator_name);",
+    "CREATE INDEX IF NOT EXISTS idx_ic_date        ON input_costs   (date);",
 ]
 
 
@@ -96,6 +110,7 @@ def init_db(db_path: Path | None = None) -> Path:
         conn.execute(DDL_FREIGHT_RATES)
         conn.execute(DDL_RATE_SIGNALS)
         conn.execute(DDL_ALERTS_LOG)
+        conn.execute(DDL_INPUT_COSTS)
         for idx_sql in DDL_INDICES:
             conn.execute(idx_sql)
         conn.commit()
@@ -305,6 +320,91 @@ def get_rate_history(
                 """,
                 (route, weeks),
             ).fetchall()
+
+    return [dict(r) for r in rows]
+
+
+def insert_input_costs(
+    costs: list[dict[str, Any]],
+    db_path: Path | None = None,
+) -> int:
+    """
+    Insert a batch of input cost records into *input_costs*.
+
+    Skips duplicates (same indicator_name + date).
+
+    Parameters
+    ----------
+    costs : list[dict]
+        Each dict must contain keys:
+        indicator_name, value, unit, date, source
+
+    Returns
+    -------
+    int: Number of rows actually inserted.
+    """
+    if not costs:
+        return 0
+
+    inserted = 0
+
+    with _connect(db_path) as conn:
+        for c in costs:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO input_costs
+                        (indicator_name, value, unit, date, source)
+                    SELECT ?, ?, ?, ?, ?
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM input_costs
+                        WHERE indicator_name = ? AND date = ?
+                    )
+                    """,
+                    (
+                        c["indicator_name"],
+                        c["value"],
+                        c["unit"],
+                        c["date"],
+                        c["source"],
+                        c["indicator_name"],
+                        c["date"],
+                    ),
+                )
+                inserted += conn.execute("SELECT changes()").fetchone()[0]
+            except (KeyError, sqlite3.Error) as exc:
+                logger.error("insert_input_costs: skipping row due to error: %s | row=%s", exc, c)
+
+    logger.info("insert_input_costs: inserted %d / %d records", inserted, len(costs))
+    return inserted
+
+
+def get_input_cost_history(
+    indicator: str,
+    weeks: int = 12,
+    db_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Return up to *weeks* weeks of daily history for an input cost indicator.
+
+    Parameters
+    ----------
+    indicator : str
+        Exact indicator_name string (case-sensitive).
+    weeks     : int
+        Number of weeks of history to return (converted to days).
+    """
+    days = weeks * 7
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM input_costs
+            WHERE indicator_name = ?
+            ORDER BY date DESC
+            LIMIT ?
+            """,
+            (indicator, days),
+        ).fetchall()
 
     return [dict(r) for r in rows]
 

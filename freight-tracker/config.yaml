@@ -9,6 +9,9 @@ scrapers:
   drewry: true
   freightos: true
   scfi: true
+  # Input cost scrapers — run separately via --input-costs
+  bunker: true
+  crude: true
 
 # ---------------------------------------------------------------------------
 # Alert thresholds
