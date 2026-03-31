@@ -16,8 +16,6 @@ import logging
 from datetime import datetime
 from typing import Any
 
-import yfinance as yf
-
 logger = logging.getLogger(__name__)
 
 TICKERS: dict[str, str] = {
@@ -44,6 +42,12 @@ def scrape_crude() -> list[dict[str, Any]]:
     list[dict]: Each item contains:
         commodity, price_usd, date, source
     """
+    try:
+        import yfinance as yf
+    except ImportError as exc:
+        logger.error("scrape_crude: yfinance not available: %s", exc)
+        return []
+
     results: list[dict[str, Any]] = []
 
     for commodity, ticker_symbol in TICKERS.items():
