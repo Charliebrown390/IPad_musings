@@ -317,7 +317,11 @@ def _generate_executive_summary(
 
     # --- {news_signals} block ---
     if news_signal:
-        key_events = "; ".join(news_signal.get("key_events") or []) or "none detected"
+        def _event_str(item: object) -> str:
+            if isinstance(item, dict):
+                return str(item.get("event") or item.get("description") or item.get("title") or item)
+            return str(item)
+        key_events = "; ".join(_event_str(e) for e in (news_signal.get("key_events") or [])) or "none detected"
         news_text = (
             f"geopolitical_risk={_fmt(news_signal.get('geopolitical_score'))}/100  "
             f"labour_disruption={_fmt(news_signal.get('labour_score'))}/100  "

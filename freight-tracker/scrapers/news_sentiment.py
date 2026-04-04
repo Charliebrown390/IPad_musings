@@ -7,7 +7,7 @@ batches them to claude-haiku-4-5-20251001, and returns structured risk scores.
 RSS sources
 -----------
 - https://splash247.com/feed/
-- https://www.tradewindsnews.com/rss
+- https://www.tradewindsnews.com/rss/news
 
 Anthropic API key is read from the ANTHROPIC_API_KEY environment variable.
 Returns None silently when the key is absent (no API cost incurred).
@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 RSS_FEEDS: list[str] = [
     "https://splash247.com/feed/",
-    "https://www.tradewindsnews.com/rss",
+    "https://www.tradewindsnews.com/rss/news",
 ]
 
 HEADLINES_PER_FEED = 10       # cap per feed before deduplication
@@ -248,11 +248,14 @@ def scrape_news_sentiment() -> dict[str, Any] | None:
         logger.info("[news] ANTHROPIC_API_KEY not set — skipping news sentiment")
         return None
 
-    # Collect headlines from all feeds
+    # Collect headlines from all feeds — a failure on one feed is non-fatal
     all_headlines: list[str] = []
     for feed_url in RSS_FEEDS:
         time.sleep(1)   # polite inter-feed pause
-        all_headlines.extend(_fetch_headlines(feed_url))
+        try:
+            all_headlines.extend(_fetch_headlines(feed_url))
+        except Exception as exc:
+            logger.warning("[news] Skipping feed %s: %s", feed_url, exc)
 
     # Deduplicate while preserving order, then cap total
     seen: set[str] = set()
