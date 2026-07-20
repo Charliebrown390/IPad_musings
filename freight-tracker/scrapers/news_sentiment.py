@@ -189,6 +189,32 @@ def _clamp(val: Any, lo: float = 0.0, hi: float = 100.0) -> float:
         return 0.0
 
 
+def _stringify_list(items: Any) -> list[str]:
+    """
+    Coerce a model-returned list into a clean list of strings.
+
+    The LLM may return list items as plain strings OR as dicts (e.g.
+    {"event": "..."} / {"route": "...", "reason": "..."}). Normalise both
+    to strings here so every downstream consumer (report, DB, exec summary)
+    receives strings and never crashes on a dict.
+    """
+    result: list[str] = []
+    for item in items or []:
+        if isinstance(item, dict):
+            # Prefer the most descriptive common keys, else fall back to str()
+            val = (
+                item.get("event")
+                or item.get("route")
+                or item.get("description")
+                or item.get("title")
+                or item.get("name")
+            )
+            result.append(str(val) if val is not None else str(item))
+        else:
+            result.append(str(item))
+    return result
+
+
 def _analyse_headlines(headlines: list[str], api_key: str) -> dict[str, Any] | None:
     """
     Send *headlines* to Haiku and return the parsed, validated result dict.
@@ -281,8 +307,8 @@ def scrape_news_sentiment() -> dict[str, Any] | None:
         "geopolitical_score":  _clamp(data["geopolitical_risk_score"]),
         "labour_score":        _clamp(data["labour_disruption_risk"]),
         "port_score":          _clamp(data["port_congestion_risk"]),
-        "key_events":          list(data.get("key_events") or [])[:3],
-        "affected_routes":     list(data.get("affected_routes") or []),
+        "key_events":          _stringify_list(data.get("key_events"))[:3],
+        "affected_routes":     _stringify_list(data.get("affected_routes")),
         "headlines_used":      len(headlines),
         "scraped_at":          now.isoformat(),
     }

@@ -169,14 +169,26 @@ def _build_news_sentiment_section(news: dict[str, Any]) -> list[str]:
         "",
     ]
 
+    def _as_text(item: object) -> str:
+        if isinstance(item, dict):
+            return str(
+                item.get("event")
+                or item.get("route")
+                or item.get("description")
+                or item.get("title")
+                or item.get("name")
+                or item
+            )
+        return str(item)
+
     if events:
         lines.append("**Key Events Detected:**")
-        lines.extend(f"- {e}" for e in events[:3])
+        lines.extend(f"- {_as_text(e)}" for e in events[:3])
         lines.append("")
 
     if affected_routes:
         lines.append(
-            "**Routes at Risk:** " + " · ".join(affected_routes)
+            "**Routes at Risk:** " + " · ".join(_as_text(r) for r in affected_routes)
         )
         lines.append("")
 
