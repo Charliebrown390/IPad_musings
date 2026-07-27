@@ -34,6 +34,7 @@ from database.db import (
     get_input_cost_history,
     insert_signal,
 )
+from analysis.route_normaliser import normalise_route
 
 logger = logging.getLogger(__name__)
 
@@ -44,14 +45,11 @@ SPIKE_MOMENTUM_PCT = 10.0          # WoW % above this → SPIKE
 COOLING_MOMENTUM_PCT = -5.0        # WoW % below this → COOLING
 DIVERGENCE_THRESHOLD_PCT = 15.0    # FBX vs WCI spread → DIVERGENCE
 STRESS_THRESHOLD_PCT = 40.0        # route above 12W avg → STRESS
+# Key EU lanes watched for stress. Canonical IDs, so no spelling variants
+# need listing — the normaliser resolves every scraper's wording to these.
 STRESS_ROUTES = {
-    "Shanghai → Rotterdam",
-    "Shanghai → Genoa",
-    # common alternative spellings that scrapers may produce
-    "Shanghai/Rotterdam",
-    "Shanghai/Genoa",
-    "SHANGHAI-ROTTERDAM",
-    "SHANGHAI-GENOA",
+    "CN_NEUR",   # Shanghai → Rotterdam / North Europe
+    "CN_MED",    # Shanghai → Genoa / Mediterranean
 }
 
 # ---------------------------------------------------------------------------
@@ -126,21 +124,18 @@ def _momentum_label(series: pd.Series) -> tuple[str, float | None]:
 
 def _stress_flag(route: str, series: pd.Series) -> tuple[str | None, float | None]:
     """
-    Flag STRESS if the route is a key EU lane AND its current rate is
+    Flag STRESS if the lane is a key EU lane AND its current rate is
     more than STRESS_THRESHOLD_PCT above its 12-week average.
+
+    Parameters
+    ----------
+    route : Canonical lane ID (e.g. 'CN_NEUR').
 
     Returns
     -------
     ("STRESS", pct_above_avg) or (None, None)
     """
-    # Normalise for comparison
-    route_upper = route.upper().replace(" ", "").replace("→", "-").replace("/", "-")
-    is_stress_route = any(
-        r.upper().replace(" ", "").replace("→", "-").replace("/", "-") in route_upper
-        or route_upper in r.upper().replace(" ", "").replace("→", "-").replace("/", "-")
-        for r in STRESS_ROUTES
-    )
-    if not is_stress_route:
+    if route not in STRESS_ROUTES:
         return None, None
 
     s = series.dropna().sort_index()
@@ -164,14 +159,14 @@ def _divergence_flag(
     df_all: pd.DataFrame,
 ) -> tuple[str | None, float | None, float | None]:
     """
-    Compare the latest FBX and WCI rates for *route*.
+    Compare the latest FBX and WCI rates for the canonical lane *route*.
 
     Returns
     -------
     ("DIVERGENCE", fbx_rate, wci_rate)  or  (None, fbx_rate, wci_rate)
-    The rates may be None if the index has no data for this route.
+    The rates may be None if the index has no data for this lane.
     """
-    route_df = df_all[df_all["route"] == route]
+    route_df = df_all[df_all["canonical_route_id"] == route]
 
     fbx_rows = route_df[route_df["index_name"].str.contains("FBX|Freightos", case=False, na=False)]
     wci_rows = route_df[route_df["index_name"].str.contains("WCI|Drewry", case=False, na=False)]
@@ -231,7 +226,7 @@ def _fetch_freight_composite_weekly(weeks: int = _NORM_WEEKS) -> pd.Series:
         logger.warning("inflation_score: could not fetch latest rates: %s", exc)
         return pd.Series(dtype=float)
 
-    routes = list({r["route"] for r in latest})
+    routes = list({r["canonical_route_id"] for r in latest if r.get("canonical_route_id")})
     if not routes:
         return pd.Series(dtype=float)
 
@@ -411,11 +406,14 @@ def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
     ----------
     df : pd.DataFrame
         Must contain columns: index_name, route, rate_usd, week_ending.
-        Typically covers 12 weeks of history per route.
+        ``canonical_route_id`` is used when present and derived from ``route``
+        otherwise, so lanes are grouped per physical lane rather than per
+        scraper spelling.
+        Typically covers 12 weeks of history per lane.
 
     Returns
     -------
-    dict[route_str, signal_dict]
+    dict[canonical_route_id, signal_dict]
 
     Each signal_dict contains:
         wow_pct                        : float | None
@@ -441,13 +439,29 @@ def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
 
     df = df.copy()
     df["week_ending"] = pd.to_datetime(df["week_ending"])
-    df = df.sort_values(["route", "index_name", "week_ending"])
 
-    routes = df["route"].unique().tolist()
+    # Group by physical lane, not by scraper spelling. Rows written before the
+    # canonicalisation migration may lack the column, so derive it on the fly.
+    if "canonical_route_id" not in df.columns:
+        df["canonical_route_id"] = [
+            normalise_route(r, i)
+            for r, i in zip(df["route"], df.get("index_name", [None] * len(df)))
+        ]
+    else:
+        df["canonical_route_id"] = df["canonical_route_id"].fillna(
+            pd.Series(
+                [normalise_route(r, i) for r, i in zip(df["route"], df["index_name"])],
+                index=df.index,
+            )
+        )
+
+    df = df.sort_values(["canonical_route_id", "index_name", "week_ending"])
+
+    routes = df["canonical_route_id"].unique().tolist()
     results: dict[str, dict[str, Any]] = {}
 
     for route in routes:
-        route_df = df[df["route"] == route]
+        route_df = df[df["canonical_route_id"] == route]
 
         # Aggregate across all indices for this route (mean if multiple)
         agg_series = (
@@ -520,8 +534,8 @@ def generate_weekly_signals(
         Overrides SPIKE_MOMENTUM_PCT if supplied from config.
     """
     latest = get_latest_rates()
-    routes = list({r["route"] for r in latest})
-    logger.info("generate_weekly_signals: fetching history for %d routes", len(routes))
+    routes = list({r["canonical_route_id"] for r in latest if r.get("canonical_route_id")})
+    logger.info("generate_weekly_signals: fetching history for %d lanes", len(routes))
 
     all_rows: list[dict] = []
     for route in routes:
@@ -537,8 +551,8 @@ def generate_weekly_signals(
 
     flat: list[dict[str, Any]] = []
     for route, sig in signals_by_route.items():
-        # Determine the most-recent week_ending for this route
-        route_rows = [r for r in all_rows if r["route"] == route]
+        # Determine the most-recent week_ending for this lane
+        route_rows = [r for r in all_rows if r.get("canonical_route_id") == route]
         week_ending = max(r["week_ending"] for r in route_rows) if route_rows else ""
 
         breakdown = sig.get("inflationary_pressure_breakdown", {})

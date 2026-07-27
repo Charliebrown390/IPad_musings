@@ -28,6 +28,7 @@ import pandas as pd
 import yaml
 
 from database.db import get_latest_rates, get_rate_history, insert_alert, get_latest_news_signal
+from analysis.route_normaliser import display_name
 
 logger = logging.getLogger(__name__)
 
@@ -99,15 +100,15 @@ def _build_summary_table(
 ) -> str:
     """
     Build the Route | FBX Rate | WCI Rate | WoW % | 4W Avg | Signal table.
-    One row per unique route, merging FBX and WCI columns.
+    One row per canonical lane, merging FBX and WCI columns.
     """
-    # Index latest rates by (route, index_name) for O(1) lookup
+    # Index latest rates by (canonical lane, index_name) for O(1) lookup
     rate_lookup: dict[tuple[str, str], float] = {}
     for row in latest_rates:
-        key = (row["route"], row["index_name"])
+        key = (row.get("canonical_route_id") or row["route"], row["index_name"])
         rate_lookup[key] = row["rate_usd"]
 
-    routes = sorted({r["route"] for r in latest_rates})
+    routes = sorted({r.get("canonical_route_id") or r["route"] for r in latest_rates})
 
     header = "| Route | FBX Rate | WCI Rate | WoW % | 4W Avg | Signal |"
     sep    = "|-------|----------|----------|-------|--------|--------|"
@@ -133,7 +134,7 @@ def _build_summary_table(
         label = _signal_label(sig)
 
         rows.append(
-            f"| {route} | {_fmt_rate(fbx)} | {_fmt_rate(wci)} "
+            f"| {display_name(route)} | {_fmt_rate(fbx)} | {_fmt_rate(wci)} "
             f"| {wow} | {avg4w} | {label} |"
         )
 

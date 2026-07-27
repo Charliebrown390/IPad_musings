@@ -94,6 +94,10 @@ from database.db import (  # noqa: E402
     insert_input_costs, insert_news_signal,
 )
 from analysis.signals import generate_signals, generate_weekly_signals      # noqa: E402
+from analysis.route_normaliser import (                                     # noqa: E402
+    normalise_route,
+    validate_route_coverage,
+)
 from reports.reporter import generate_weekly_report, generate_intraday_alert  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -115,7 +119,7 @@ def _load_config() -> dict:
 # ---------------------------------------------------------------------------
 
 def _build_history_df(routes: list[str], weeks: int = 12) -> pd.DataFrame:
-    """Fetch *weeks* of DB history for *routes* and return as a DataFrame."""
+    """Fetch *weeks* of DB history for canonical lane IDs *routes*."""
     rows: list[dict] = []
     for route in routes:
         rows.extend(get_rate_history(route, weeks=weeks))
@@ -173,11 +177,16 @@ def run_now(config: dict) -> None:
     # 1. Scrape all sources
     rates = _run_scrapers(config)
     inserted = insert_rates(rates)
-    logger.info("Scraped %d records; %d new inserts", len(rates), inserted)
+    logger.info("Scraped %d records; %d rows written", len(rates), inserted)
+
+    # 1b. Surface any scraper output that failed to map to a canonical lane,
+    #     so a renamed upstream label is visible rather than silently minting
+    #     a new route key.
+    validate_route_coverage()
 
     # 2. Compute signals from 12-week history
     latest_rates = get_latest_rates()
-    routes = list({r["route"] for r in latest_rates})
+    routes = list({r["canonical_route_id"] for r in latest_rates if r.get("canonical_route_id")})
     history_df = _build_history_df(routes, weeks=12)
 
     signals_by_route = generate_signals(history_df) if not history_df.empty else {}
@@ -235,20 +244,24 @@ def intraday_check(config: dict) -> None:
         logger.warning("intraday-check: no rates in DB — nothing to check")
         return
 
-    all_db_routes = list({r["route"] for r in latest_rates})
+    all_db_routes = list(
+        {r["canonical_route_id"] for r in latest_rates if r.get("canonical_route_id")}
+    )
 
     if routes_of_interest:
-        # Resolve config patterns to actual DB route names via case-insensitive
-        # substring matching so config entries like "US West Coast" match the
-        # scraped label "Shanghai → US West Coast".
+        # Config entries are human-readable lane names ("Shanghai → Europe").
+        # Resolve each through the normaliser so it lands on the same canonical
+        # ID the DB now stores, instead of substring-matching raw strings.
         resolved: list[str] = []
         for pattern in routes_of_interest:
-            pat_lower = pattern.strip().lower()
-            matched = [r for r in all_db_routes if pat_lower in r.lower() or r.lower() in pat_lower]
-            if matched:
-                resolved.extend(matched)
+            canonical = normalise_route(pattern)
+            if canonical in all_db_routes:
+                resolved.append(canonical)
             else:
-                logger.debug("intraday-check: no DB route matched pattern '%s'", pattern)
+                logger.debug(
+                    "intraday-check: config route '%s' resolved to %s, "
+                    "which has no rows in the DB", pattern, canonical,
+                )
         routes = list(dict.fromkeys(resolved))  # dedupe, preserve order
         if not routes:
             logger.warning(

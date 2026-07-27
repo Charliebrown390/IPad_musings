@@ -19,6 +19,12 @@ from typing import Any, Generator
 
 logger = logging.getLogger(__name__)
 
+# NOTE: analysis.route_normaliser is imported inside the functions that need
+# it rather than at module scope. Importing `analysis.*` executes
+# analysis/__init__.py, which pulls in analysis.signals, which imports this
+# module — a cycle. route_normaliser itself is a leaf with no project
+# imports, so a deferred import resolves cleanly.
+
 # Default DB path — override via config or env var if needed
 DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "freight.db"
 
@@ -28,15 +34,25 @@ DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "freight.db"
 
 DDL_FREIGHT_RATES = """
 CREATE TABLE IF NOT EXISTS freight_rates (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    index_name  TEXT    NOT NULL,
-    route       TEXT    NOT NULL,
-    rate_usd    REAL    NOT NULL,
-    week_ending TEXT    NOT NULL,   -- ISO date YYYY-MM-DD
-    scraped_at  TEXT    NOT NULL,   -- ISO datetime
-    source      TEXT    NOT NULL
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    index_name        TEXT    NOT NULL,
+    route             TEXT    NOT NULL,
+    rate_usd          REAL    NOT NULL,
+    week_ending       TEXT    NOT NULL,   -- ISO date YYYY-MM-DD
+    scraped_at        TEXT    NOT NULL,   -- ISO datetime
+    source            TEXT    NOT NULL,
+    canonical_route_id TEXT,              -- e.g. 'CN_NEUR'; drives ALL joins/WoW
+    raw_route_string   TEXT               -- scraper's original label, audit only
 );
 """
+
+# Columns added after the table's first release. SQLite cannot express these
+# in CREATE TABLE IF NOT EXISTS for an existing table, so they are applied
+# idempotently by _migrate_schema().
+MIGRATIONS_FREIGHT_RATES = [
+    ("canonical_route_id", "ALTER TABLE freight_rates ADD COLUMN canonical_route_id TEXT"),
+    ("raw_route_string",   "ALTER TABLE freight_rates ADD COLUMN raw_route_string TEXT"),
+]
 
 DDL_RATE_SIGNALS = """
 CREATE TABLE IF NOT EXISTS rate_signals (
@@ -87,12 +103,21 @@ DDL_INDICES = [
     "CREATE INDEX IF NOT EXISTS idx_fr_route       ON freight_rates (route);",
     "CREATE INDEX IF NOT EXISTS idx_fr_index_name  ON freight_rates (index_name);",
     "CREATE INDEX IF NOT EXISTS idx_fr_week_ending ON freight_rates (week_ending);",
+    "CREATE INDEX IF NOT EXISTS idx_fr_canonical   ON freight_rates (canonical_route_id);",
     "CREATE INDEX IF NOT EXISTS idx_rs_route       ON rate_signals  (route);",
     "CREATE INDEX IF NOT EXISTS idx_al_route       ON alerts_log    (route);",
     "CREATE INDEX IF NOT EXISTS idx_ic_indicator   ON input_costs   (indicator_name);",
     "CREATE INDEX IF NOT EXISTS idx_ic_date        ON input_costs   (date);",
     "CREATE INDEX IF NOT EXISTS idx_ns_date        ON news_signals  (date);",
 ]
+
+# One physical lane may have exactly one rate per index per week.
+# Created separately from DDL_INDICES because it fails on a table that still
+# holds pre-normalisation duplicates — see _ensure_unique_lane_index().
+DDL_UNIQUE_LANE = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_fr_lane_week "
+    "ON freight_rates (index_name, canonical_route_id, week_ending);"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -127,12 +152,43 @@ def init_db(db_path: Path | None = None) -> Path:
         conn.execute(DDL_ALERTS_LOG)
         conn.execute(DDL_INPUT_COSTS)
         conn.execute(DDL_NEWS_SIGNALS)
+        _migrate_schema(conn)
         for idx_sql in DDL_INDICES:
             conn.execute(idx_sql)
+        _ensure_unique_lane_index(conn)
         conn.commit()
 
     logger.info("Database ready at %s", path.resolve())
     return path
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the table's first release, idempotently."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(freight_rates)")}
+    for column, ddl in MIGRATIONS_FREIGHT_RATES:
+        if column not in existing:
+            conn.execute(ddl)
+            logger.info("_migrate_schema: added freight_rates.%s", column)
+
+
+def _ensure_unique_lane_index(conn: sqlite3.Connection) -> bool:
+    """
+    Create the (index_name, canonical_route_id, week_ending) UNIQUE index.
+
+    Returns False without raising when the table still holds pre-normalisation
+    duplicates — the caller is told to run ``migrate_routes.py``, which
+    de-duplicates and then installs the index.
+    """
+    try:
+        conn.execute(DDL_UNIQUE_LANE)
+        return True
+    except sqlite3.IntegrityError:
+        logger.warning(
+            "UNIQUE lane index not created: freight_rates still contains "
+            "duplicate (index_name, canonical_route_id, week_ending) rows. "
+            "Run `python migrate_routes.py` to backfill and de-duplicate."
+        )
+        return False
 
 
 @contextmanager
@@ -163,7 +219,11 @@ def insert_rates(
     """
     Insert a batch of rate dicts into *freight_rates*.
 
-    Skips duplicates (same index_name + route + week_ending).
+    Each row's raw route string is resolved to a canonical lane ID, and both
+    the canonical ID and the original string are stored. Writes use
+    INSERT OR REPLACE keyed on the UNIQUE (index_name, canonical_route_id,
+    week_ending) index, so re-running a scrape updates the existing row for
+    that lane and week rather than appending a near-duplicate.
 
     Parameters
     ----------
@@ -173,45 +233,62 @@ def insert_rates(
 
     Returns
     -------
-    int: Number of rows actually inserted.
+    int: Number of rows written (inserted or updated in place).
     """
     if not rates:
         return 0
 
+    from analysis.route_normaliser import (  # noqa: PLC0415 — breaks import cycle
+        is_unmapped,
+        normalise_index,
+        normalise_route,
+    )
+
     scraped_at = datetime.now(timezone.utc).isoformat()
-    inserted = 0
+    written = 0
+    unmapped_seen: set[str] = set()
 
     with _connect(db_path) as conn:
         for r in rates:
             try:
+                raw_route = r["route"]
+                canonical = normalise_route(raw_route, r.get("index_name"))
+                index_name = normalise_index(r["index_name"])
+
+                if is_unmapped(canonical):
+                    unmapped_seen.add(str(raw_route))
+
                 conn.execute(
                     """
-                    INSERT INTO freight_rates
-                        (index_name, route, rate_usd, week_ending, scraped_at, source)
-                    SELECT ?, ?, ?, ?, ?, ?
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM freight_rates
-                        WHERE index_name = ? AND route = ? AND week_ending = ?
-                    )
+                    INSERT OR REPLACE INTO freight_rates
+                        (index_name, route, rate_usd, week_ending, scraped_at,
+                         source, canonical_route_id, raw_route_string)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        r["index_name"],
-                        r["route"],
+                        index_name,
+                        raw_route,
                         r["rate_usd_per_feu"],
                         r["week_ending"],
                         scraped_at,
                         r["source_url"],
-                        r["index_name"],
-                        r["route"],
-                        r["week_ending"],
+                        canonical,
+                        raw_route,
                     ),
                 )
-                inserted += conn.execute("SELECT changes()").fetchone()[0]
+                written += conn.execute("SELECT changes()").fetchone()[0]
             except (KeyError, sqlite3.Error) as exc:
                 logger.error("insert_rates: skipping row due to error: %s | row=%s", exc, r)
 
-    logger.info("insert_rates: inserted %d / %d records", inserted, len(rates))
-    return inserted
+    for raw in sorted(unmapped_seen):
+        logger.warning(
+            "insert_rates: route '%s' did not map to a canonical lane — "
+            "stored as UNMAPPED. Add a mapping in analysis/route_normaliser.py",
+            raw,
+        )
+
+    logger.info("insert_rates: wrote %d / %d records", written, len(rates))
+    return written
 
 
 def insert_signal(
@@ -254,13 +331,18 @@ def get_latest_rates(
     db_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Return the most-recent rate for every (index_name, route) pair.
+    Return the most-recent rate for every (index_name, canonical_route_id) lane.
+
+    Grouping is by canonical lane, not by raw route string, so a lane that
+    several scrapers spell differently yields one row rather than several.
 
     Parameters
     ----------
     index_name : str, optional
-        Filter to a specific index (e.g. 'Drewry WCI').
+        Filter to a specific index (e.g. 'WCI'). Normalised before matching.
     """
+    from analysis.route_normaliser import normalise_index  # noqa: PLC0415
+
     with _connect(db_path) as conn:
         if index_name:
             rows = conn.execute(
@@ -268,17 +350,17 @@ def get_latest_rates(
                 SELECT fr.*
                 FROM freight_rates fr
                 INNER JOIN (
-                    SELECT index_name, route, MAX(week_ending) AS max_week
+                    SELECT index_name, canonical_route_id, MAX(week_ending) AS max_week
                     FROM freight_rates
                     WHERE index_name = ?
-                    GROUP BY index_name, route
+                    GROUP BY index_name, canonical_route_id
                 ) latest
-                ON fr.index_name = latest.index_name
-                AND fr.route      = latest.route
-                AND fr.week_ending = latest.max_week
-                ORDER BY fr.route
+                ON fr.index_name         = latest.index_name
+                AND fr.canonical_route_id = latest.canonical_route_id
+                AND fr.week_ending        = latest.max_week
+                ORDER BY fr.canonical_route_id
                 """,
-                (index_name,),
+                (normalise_index(index_name),),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -286,14 +368,14 @@ def get_latest_rates(
                 SELECT fr.*
                 FROM freight_rates fr
                 INNER JOIN (
-                    SELECT index_name, route, MAX(week_ending) AS max_week
+                    SELECT index_name, canonical_route_id, MAX(week_ending) AS max_week
                     FROM freight_rates
-                    GROUP BY index_name, route
+                    GROUP BY index_name, canonical_route_id
                 ) latest
-                ON fr.index_name  = latest.index_name
-                AND fr.route       = latest.route
-                AND fr.week_ending = latest.max_week
-                ORDER BY fr.index_name, fr.route
+                ON fr.index_name         = latest.index_name
+                AND fr.canonical_route_id = latest.canonical_route_id
+                AND fr.week_ending        = latest.max_week
+                ORDER BY fr.index_name, fr.canonical_route_id
                 """,
             ).fetchall()
 
@@ -307,34 +389,64 @@ def get_rate_history(
     db_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Return up to *weeks* weeks of history for a given route.
+    Return up to *weeks* weeks of history for one canonical lane.
 
     Parameters
     ----------
-    route       : Exact route string (case-sensitive).
-    weeks       : Number of most-recent distinct weeks to return.
+    route       : Canonical lane ID (e.g. 'CN_NEUR'). A raw scraper string is
+                  also accepted and normalised, so older callers keep working.
+    weeks       : Number of most-recent distinct weeks to return. Every index's
+                  rows for those weeks are returned — a lane now spans several
+                  indices, so limiting by row count would silently drop one
+                  index's history in favour of whichever reports most often.
     index_name  : Optional filter to a single index source.
     """
+    from analysis.route_normaliser import (  # noqa: PLC0415
+        CANONICAL_ROUTES,
+        normalise_index,
+        normalise_route,
+        is_unmapped,
+    )
+
+    # Accept either a canonical ID or a raw route string.
+    if route in CANONICAL_ROUTES or is_unmapped(route):
+        canonical = route
+    else:
+        canonical = normalise_route(route, index_name)
+
     with _connect(db_path) as conn:
         if index_name:
             rows = conn.execute(
                 """
                 SELECT * FROM freight_rates
-                WHERE route = ? AND index_name = ?
+                WHERE canonical_route_id = ? AND index_name = ?
+                  AND week_ending IN (
+                      SELECT week_ending FROM freight_rates
+                      WHERE canonical_route_id = ? AND index_name = ?
+                      GROUP BY week_ending
+                      ORDER BY week_ending DESC
+                      LIMIT ?
+                  )
                 ORDER BY week_ending DESC
-                LIMIT ?
                 """,
-                (route, index_name, weeks),
+                (canonical, normalise_index(index_name),
+                 canonical, normalise_index(index_name), weeks),
             ).fetchall()
         else:
             rows = conn.execute(
                 """
                 SELECT * FROM freight_rates
-                WHERE route = ?
+                WHERE canonical_route_id = ?
+                  AND week_ending IN (
+                      SELECT week_ending FROM freight_rates
+                      WHERE canonical_route_id = ?
+                      GROUP BY week_ending
+                      ORDER BY week_ending DESC
+                      LIMIT ?
+                  )
                 ORDER BY week_ending DESC
-                LIMIT ?
                 """,
-                (route, weeks),
+                (canonical, canonical, weeks),
             ).fetchall()
 
     return [dict(r) for r in rows]
