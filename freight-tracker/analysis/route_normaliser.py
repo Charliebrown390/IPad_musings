@@ -47,7 +47,15 @@ UNMAPPED_PREFIX = "UNMAPPED:"
 # Canonical registry — one entry per physical lane
 # ---------------------------------------------------------------------------
 
+# Every ID is ORIGIN_DEST built from one region vocabulary, so direction is
+# part of the identity. Without that, a backhaul lane and its headhaul twin
+# resolve to the same ID and INSERT OR REPLACE destroys one of them.
+#
+# Region tokens: CN, USWC, USEC, NEUR, MED, SAM, OCE, PG.
+# NEUR is the sole token for North Europe; an earlier EUR_USEC spelling used a
+# second token for the same region and is renamed by _migrate_canonical_ids().
 CANONICAL_ROUTES: dict[str, str] = {
+    # Headhaul — Asia outbound
     "CN_USWC":   "China/East Asia → North America West Coast",
     "CN_USEC":   "China/East Asia → North America East Coast",
     "CN_NEUR":   "China/East Asia → North Europe",
@@ -55,8 +63,40 @@ CANONICAL_ROUTES: dict[str, str] = {
     "CN_SAM":    "China/East Asia → South America",
     "CN_OCE":    "China/East Asia → Oceania",
     "CN_PG":     "China/East Asia → Persian Gulf",
-    "EUR_USEC":  "Europe → North America East Coast",
+    # Headhaul — transatlantic
+    "NEUR_USEC": "North Europe → North America East Coast",
     "USEC_NEUR": "North America East Coast → North Europe",
+    # Backhaul — the return legs into Asia
+    "USWC_CN":   "North America West Coast → China/East Asia",
+    "USEC_CN":   "North America East Coast → China/East Asia",
+    "NEUR_CN":   "North Europe → China/East Asia",
+    "MED_CN":    "Mediterranean → China/East Asia",
+    "SAM_CN":    "South America → China/East Asia",
+    "OCE_CN":    "Oceania → China/East Asia",
+}
+
+# Lanes running *into* Asia are backhaul: carriers price the return leg near
+# marginal cost to avoid repositioning empty boxes, so the rate reflects
+# repositioning economics rather than demand. Low values on these lanes are
+# legitimate, not corrupt.
+BACKHAUL_ROUTES: frozenset[str] = frozenset({
+    "USWC_CN", "USEC_CN", "NEUR_CN", "MED_CN", "SAM_CN", "OCE_CN",
+})
+
+
+def is_backhaul(canonical_route_id: str | None) -> bool:
+    """
+    True when the lane is a return leg.
+
+    Derived from the registry rather than stored, so it cannot drift out of
+    step with the ID it describes.
+    """
+    return bool(canonical_route_id) and canonical_route_id in BACKHAUL_ROUTES
+
+
+# Canonical IDs superseded by the direction-aware vocabulary, old -> new.
+RENAMED_CANONICAL_IDS: dict[str, str] = {
+    "EUR_USEC": "NEUR_USEC",
 }
 
 
@@ -118,10 +158,11 @@ _SYNONYM_INDEX: list[tuple[str, str]] = sorted(
 # ---------------------------------------------------------------------------
 # Origin/destination pair → canonical ID
 # ---------------------------------------------------------------------------
-# Explicit rather than derived, because the registry is not symmetric:
-# the Europe→US-East lane is named EUR_USEC while the reverse is USEC_NEUR.
+# Explicit rather than derived, so that adding a lane is a deliberate act and
+# a region pair with no defined lane stays unmapped rather than inferred.
 
 _LANE_IDS: dict[tuple[str, str], str] = {
+    # Headhaul
     ("CN", "USWC"):   "CN_USWC",
     ("CN", "USEC"):   "CN_USEC",
     ("CN", "NEUR"):   "CN_NEUR",
@@ -129,8 +170,15 @@ _LANE_IDS: dict[tuple[str, str], str] = {
     ("CN", "SAM"):    "CN_SAM",
     ("CN", "OCE"):    "CN_OCE",
     ("CN", "PG"):     "CN_PG",
-    ("NEUR", "USEC"): "EUR_USEC",
+    ("NEUR", "USEC"): "NEUR_USEC",
     ("USEC", "NEUR"): "USEC_NEUR",
+    # Backhaul
+    ("USWC", "CN"):   "USWC_CN",
+    ("USEC", "CN"):   "USEC_CN",
+    ("NEUR", "CN"):   "NEUR_CN",
+    ("MED",  "CN"):   "MED_CN",
+    ("SAM",  "CN"):   "SAM_CN",
+    ("OCE",  "CN"):   "OCE_CN",
 }
 
 
@@ -154,7 +202,7 @@ _FBX_CODE_IDS: dict[str, str] = {
     "FBX02": "CN_USEC",    # China/East Asia → North America East Coast
     "FBX03": "CN_NEUR",    # China/East Asia → North Europe
     "FBX04": "CN_MED",     # China/East Asia → Mediterranean
-    "FBX05": "EUR_USEC",   # Europe → North America East Coast
+    "FBX05": "NEUR_USEC",  # Europe → North America East Coast
     "FBX06": "USEC_NEUR",  # North America East Coast → Europe
     "FBX11": "CN_SAM",     # China/East Asia → South America
     "FBX13": "CN_OCE",     # China/East Asia → Oceania

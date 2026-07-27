@@ -38,6 +38,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from analysis.route_normaliser import (
+    RENAMED_CANONICAL_IDS,
     is_unmapped,
     normalise_index,
     normalise_route,
@@ -69,6 +70,55 @@ def _backup(db_path: Path) -> Path:
 
 # Column additions and the week_ending -> observation_date rename are owned by
 # database.db._migrate_schema(), so init_db() and this script cannot drift.
+
+
+def _migrate_canonical_ids(conn: sqlite3.Connection) -> dict[str, int]:
+    """
+    Rename canonical IDs superseded by the direction-aware vocabulary.
+
+    Currently EUR_USEC -> NEUR_USEC: the old spelling used a second token for
+    a region the rest of the registry calls NEUR. Idempotent; a row already
+    carrying the new ID is left alone.
+    """
+    renamed: dict[str, int] = {}
+    for old_id, new_id in RENAMED_CANONICAL_IDS.items():
+        n = conn.execute(
+            "SELECT COUNT(*) FROM freight_rates WHERE canonical_route_id = ?",
+            (old_id,),
+        ).fetchone()[0]
+        if not n:
+            continue
+        # The UNIQUE index spans (index_name, canonical_route_id,
+        # observation_date, is_synthetic); a straight UPDATE would collide if
+        # rows already exist under the new ID for the same lane-day.
+        clash = conn.execute(
+            """
+            SELECT COUNT(*) FROM freight_rates a
+            WHERE a.canonical_route_id = ?
+              AND EXISTS (
+                  SELECT 1 FROM freight_rates b
+                  WHERE b.canonical_route_id = ?
+                    AND b.index_name       = a.index_name
+                    AND b.observation_date = a.observation_date
+                    AND b.is_synthetic     = a.is_synthetic
+              )
+            """,
+            (old_id, new_id),
+        ).fetchone()[0]
+        if clash:
+            logger.error(
+                "canonical ID rename %s -> %s blocked: %d row(s) would collide "
+                "with existing %s rows; resolve manually",
+                old_id, new_id, clash, new_id,
+            )
+            continue
+        conn.execute(
+            "UPDATE freight_rates SET canonical_route_id = ? WHERE canonical_route_id = ?",
+            (new_id, old_id),
+        )
+        renamed[f"{old_id} -> {new_id}"] = n
+        logger.info("Renamed canonical ID %s -> %s on %d row(s)", old_id, new_id, n)
+    return renamed
 
 
 def _flag_synthetic(conn: sqlite3.Connection) -> int:
@@ -372,6 +422,10 @@ def migrate(
 
         updated, unmapped = _backfill(conn)
         logger.info("Backfilled canonical_route_id for %d rows", updated)
+
+        renamed = _migrate_canonical_ids(conn)
+        if renamed:
+            logger.info("Canonical ID renames: %s", renamed)
 
         flagged = _flag_synthetic(conn)
         logger.info("Flagged %d row(s) as synthetic (quarantined, not deleted)", flagged)
