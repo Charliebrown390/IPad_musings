@@ -195,6 +195,70 @@ def _build_synthetic_header() -> list[str]:
     ]
 
 
+_COMPONENT_LABELS = {
+    "bunker": "Bunker Fuel",
+    "crude":  "Brent Crude",
+    "rates":  "Freight Rate Composite",
+    "bdi":    "Baltic Dry Index",
+}
+
+
+def _build_normalisation_notes(breakdown: dict[str, Any]) -> list[str]:
+    """
+    Disclose the basis of the component scores.
+
+    Two things a reader cannot otherwise know: which components were scaled on
+    less history than the design intends, and that the scales themselves moved
+    when synthetic data was removed — so today's scores do not sit on the same
+    axis as previously published ones.
+    """
+    partial = breakdown.get("partial_windows", {}) or {}
+    insufficient = breakdown.get("insufficient_components", []) or []
+    target = breakdown.get("norm_target_weeks", 52)
+
+    notes: list[str] = []
+
+    if partial:
+        detail = "; ".join(
+            f"{_COMPONENT_LABELS.get(k, k)} {w} weeks"
+            for k, w in sorted(partial.items())
+        )
+        notes.append(
+            f"> ⚠ **Partial normalisation window** — the {target}-week min-max "
+            f"scale could not be filled for: {detail}. These components are "
+            f"normalised on the history that exists, so their scores are more "
+            f"volatile than a full-window score and are not comparable to one."
+        )
+
+    if insufficient:
+        detail = ", ".join(_COMPONENT_LABELS.get(k, k) for k in insufficient)
+        notes.append(
+            f"> ⚠ **Excluded from the composite** — {detail}: fewer than 12 "
+            f"weeks of real data. Reported as INSUFFICIENT_HISTORY rather than "
+            f"normalised on a window too short to be meaningful; the remaining "
+            f"weights are redistributed proportionally."
+        )
+
+    # Task 3: scale-shift disclosure.
+    notes.append(
+        "> ℹ️ **Not comparable to earlier reports** — synthetic rows were "
+        "removed from the normalisation history on 2026-07-27. The min-max "
+        "scales shifted as a result, so component scores in reports published "
+        "before that date do not sit on the same scale as these."
+    )
+
+    if not notes:
+        return []
+    # Separate with a bare '>' so each renders as its own paragraph inside the
+    # blockquote; a blank line would end the quote instead.
+    interleaved: list[str] = []
+    for i, note in enumerate(notes):
+        if i:
+            interleaved.append(">")
+        interleaved.append(note)
+    return [*interleaved, ""]
+
+
 def _build_staleness_header(latest_rates: list[dict]) -> list[str]:
     """
     Warn about any index whose freshest data is older than the threshold.
@@ -341,15 +405,39 @@ def _build_markdown_report(
         def _fmt_component(val: float | None) -> str:
             return f"{val:.0f}" if val is not None else "N/A"
 
+        windows = breakdown.get("norm_windows", {}) or {}
+        target = breakdown.get("norm_target_weeks", 52)
+
+        def _window_cell(key: str) -> str:
+            """Normalisation window width, flagged when short of target."""
+            weeks = windows.get(key)
+            if weeks is None:
+                return "—"
+            if weeks == 0:
+                return "no data"
+            if weeks < target:
+                return f"⚠ {weeks}w of {target}w"
+            return f"{weeks}w"
+
+        def _score_cell(key: str, val: float | None) -> str:
+            if val is None:
+                weeks = windows.get(key)
+                if weeks is not None and weeks < 12:
+                    return "INSUFFICIENT_HISTORY"
+                return "N/A"
+            return f"{val:.0f}"
+
         lines += [
-            "| Component | Score (0–100) | Weight |",
-            "|-----------|--------------|--------|",
-            f"| Bunker Fuel (VLSFO Singapore 4W Δ) | {_fmt_component(breakdown.get('bunker_fuel_component'))} | 35% |",
-            f"| Brent Crude (4W Δ)                 | {_fmt_component(breakdown.get('crude_component'))} | 20% |",
-            f"| Freight Rate Composite (4W Δ)       | {_fmt_component(breakdown.get('rate_component'))} | 25% |",
-            f"| Baltic Dry Index (4W Δ)             | {_fmt_component(breakdown.get('bdi_component'))} | 20% |",
+            "| Component | Score (0–100) | Weight | Normalisation window |",
+            "|-----------|--------------|--------|----------------------|",
+            f"| Bunker Fuel (VLSFO Singapore 4W Δ) | {_score_cell('bunker', breakdown.get('bunker_fuel_component'))} | 35% | {_window_cell('bunker')} |",
+            f"| Brent Crude (4W Δ) | {_score_cell('crude', breakdown.get('crude_component'))} | 20% | {_window_cell('crude')} |",
+            f"| Freight Rate Composite (4W Δ) | {_score_cell('rates', breakdown.get('rate_component'))} | 25% | {_window_cell('rates')} |",
+            f"| Baltic Dry Index (4W Δ) | {_score_cell('bdi', breakdown.get('bdi_component'))} | 20% | {_window_cell('bdi')} |",
             "",
         ]
+
+        lines += _build_normalisation_notes(breakdown)
 
     if news_signal:
         lines += _build_news_sentiment_section(news_signal)

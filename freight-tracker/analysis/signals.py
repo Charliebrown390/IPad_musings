@@ -36,6 +36,7 @@ from database.db import (
     insert_signal,
     log_data_quality_issue,
     get_index_data_status,
+    is_synthetic_source,
 )
 from analysis.route_normaliser import normalise_route
 
@@ -65,10 +66,22 @@ FOUR_WEEK_DAYS = 28
 TWELVE_WEEK_DAYS = 84
 
 # A statistic computed on a handful of points is noise wearing a number's
-# clothes. Below this many real (non-synthetic) observations, report
+# clothes. Below this many real (non-synthetic) *calendar weeks*, report
 # INSUFFICIENT_HISTORY instead of a figure.
-MIN_REAL_OBSERVATIONS = 12
+#
+# Counted in distinct weeks, not rows or days: FBX publishes daily, so a
+# row/day count of 12 would pass on under two weeks of data.
+MIN_REAL_WEEKS = 12
 INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"
+
+# Target window for the inflation composite's min-max normalisation.
+NORM_TARGET_WEEKS = 52
+# Absolute floor. Below this a component is reported INSUFFICIENT_HISTORY and
+# excluded from the composite entirely. Between the floor and the target it is
+# normalised on the window that exists, and the report discloses the width —
+# a min-max scale over a short window is usable but not comparable to a full
+# one, so it must never be presented as if it were.
+NORM_MIN_WEEKS = 12
 # Key EU lanes watched for stress. Canonical IDs, so no spelling variants
 # need listing — the normaliser resolves every scraper's wording to these.
 STRESS_ROUTES = {
@@ -132,6 +145,21 @@ def _value_days_before(
     # Nearest to the target date, not merely inside the band.
     nearest_idx = min(window.index, key=lambda d: abs((d - target).days))
     return float(window.loc[nearest_idx])
+
+
+def _distinct_weeks(index: Any) -> int:
+    """
+    Number of distinct ISO weeks covered by a datetime index.
+
+    The honest unit for "how much history is there": a daily source produces
+    seven rows per week, so counting rows or days overstates coverage
+    sevenfold.
+    """
+    idx = pd.to_datetime(pd.Index(index), errors="coerce")
+    idx = idx[idx.notna()]
+    if len(idx) == 0:
+        return 0
+    return len({(d.isocalendar().year, d.isocalendar().week) for d in idx})
 
 
 def _window_mean(series: pd.Series, days: int, exclude_latest: bool = False) -> float | None:
@@ -411,6 +439,25 @@ def _fetch_input_cost_weekly(indicator: str, weeks: int = _NORM_WEEKS) -> pd.Ser
         return pd.Series(dtype=float)
 
     df = pd.DataFrame(rows)
+
+    # input_costs carries no is_synthetic column, so seeded rows are
+    # identified by their source. Without this the bunker and crude
+    # components would be normalised against fabricated history.
+    if "source" in df.columns:
+        synthetic_mask = df["source"].map(is_synthetic_source)
+        n_synthetic = int(synthetic_mask.sum())
+        if n_synthetic:
+            logger.warning(
+                "inflation_score: excluding %d synthetic row(s) from indicator '%s'",
+                n_synthetic, indicator,
+            )
+            df = df[~synthetic_mask]
+        if df.empty:
+            logger.warning(
+                "inflation_score: indicator '%s' has no real observations", indicator
+            )
+            return pd.Series(dtype=float)
+
     df["date"] = pd.to_datetime(df["date"])
     series = df.set_index("date")["value"].sort_index()
     # Resample to weekly end-of-period to align with freight data cadence
@@ -581,11 +628,39 @@ def _compute_inflation_score() -> dict[str, Any]:
     # ------------------------------------------------------------------
     # 2. Compute 4-week % change and 52-week normalised score per component
     # ------------------------------------------------------------------
+    # Width of the real-data window backing each component's min-max scale.
+    norm_windows: dict[str, int] = {}
+    partial_windows: dict[str, int] = {}
+
     def _score_series(series: pd.Series, label: str) -> float | None:
+        weeks = _distinct_weeks(series.index)
+        norm_windows[label] = weeks
+
+        # Below the floor the min-max scale is meaningless: two or three
+        # points define a range that any new value trivially sits at an
+        # extreme of. Exclude rather than publish a confident-looking number.
+        if weeks < NORM_MIN_WEEKS:
+            logger.warning(
+                "inflation_score: component '%s' has only %d week(s) of real "
+                "data (floor %d) — reporting %s and excluding from composite",
+                label, weeks, NORM_MIN_WEEKS, INSUFFICIENT_HISTORY,
+            )
+            return None
+
         current_4w = _4w_pct_change(series)
         if current_4w is None:
             logger.debug("inflation_score: insufficient data for component '%s'", label)
             return None
+
+        if weeks < NORM_TARGET_WEEKS:
+            partial_windows[label] = weeks
+            logger.warning(
+                "inflation_score: component '%s' normalised on a PARTIAL "
+                "%d-week window (target %d) — score is not comparable to a "
+                "full-window score",
+                label, weeks, NORM_TARGET_WEEKS,
+            )
+
         norm_history = _rolling_4w_pct_changes(series)
         # Include the current value in the normalization window
         norm_history = pd.concat(
@@ -648,6 +723,14 @@ def _compute_inflation_score() -> dict[str, Any]:
         "bdi_component":         components["bdi"],
         "composite_score":       composite,
         "warning":               warning,
+        # Provenance of the scales themselves, for disclosure in the report.
+        "norm_windows":          norm_windows,
+        "partial_windows":       partial_windows,
+        "norm_target_weeks":     NORM_TARGET_WEEKS,
+        "insufficient_components": sorted(
+            label for label, weeks in norm_windows.items()
+            if weeks < NORM_MIN_WEEKS
+        ),
     }
 
 
@@ -754,14 +837,15 @@ def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
         # 5. Freshness of this lane's most recent observation
         lane_age = data_age_days(route_df["observation_date"].max())
 
-        # A statistic over a thin series is noise. Report the shortfall rather
-        # than a number that looks authoritative.
+        # A statistic over a thin series is noise. Measure depth in calendar
+        # weeks, not rows: a daily index yields seven rows per week.
         n_real = len(agg_series)
-        if n_real < MIN_REAL_OBSERVATIONS:
+        n_weeks = _distinct_weeks(agg_series.index)
+        if n_weeks < MIN_REAL_WEEKS:
             logger.warning(
-                "generate_signals: %s has only %d real observation(s) "
-                "(minimum %d) — reporting %s",
-                route, n_real, MIN_REAL_OBSERVATIONS, INSUFFICIENT_HISTORY,
+                "generate_signals: %s has only %d real week(s) of data "
+                "(%d observations, minimum %d weeks) — reporting %s",
+                route, n_weeks, n_real, MIN_REAL_WEEKS, INSUFFICIENT_HISTORY,
             )
             results[route] = {
                 "wow_pct":          None,
@@ -779,6 +863,7 @@ def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
                 "fbx_age_days":     index_ages["fbx"],
                 "wci_age_days":     index_ages["wci"],
                 "real_observations": n_real,
+                "real_weeks":       n_weeks,
                 "insufficient_history": True,
                 "inflationary_pressure_breakdown": {},
             }
@@ -813,6 +898,7 @@ def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
             "fbx_age_days":     index_ages["fbx"],
             "wci_age_days":     index_ages["wci"],
             "real_observations": n_real,
+            "real_weeks":       n_weeks,
             "insufficient_history": False,
             "inflationary_pressure_breakdown": {},  # back-filled below
         }

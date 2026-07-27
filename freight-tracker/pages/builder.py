@@ -96,6 +96,23 @@ tr:nth-child(even) td { background: #161b22; }
   color: #f85149;
   font-weight: 600;
 }
+.integrity-banner {
+  background: #3d2f0f;
+  border: 1px solid #d29922;
+  border-left: 4px solid #d29922;
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 1.25rem;
+  color: #e3b341;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.integrity-banner .sub {
+  display: block;
+  margin-top: 0.4rem;
+  font-weight: 400;
+  color: #d7c9a7;
+}
 .archive-list { list-style: none; padding: 0; }
 .archive-list li {
   padding: 0.6rem 0;
@@ -193,6 +210,31 @@ def _find_reports() -> list[tuple[str, Path]]:
 # Page builders
 # ---------------------------------------------------------------------------
 
+# Reports published before this date were generated from synthetic SCFI and
+# WCI data that was not marked as such. The archive is kept intact — deleting
+# it would erase the evidence — so every affected page carries a banner.
+INTEGRITY_CUTOFF_DATE = "2026-07-27"
+
+INTEGRITY_NOTICE = (
+    "Reports dated before 2026-07-27 include synthetic data for SCFI and WCI "
+    "that was not marked as such. Figures in these reports are not reliable."
+)
+
+
+def _integrity_banner(sub: str | None = None) -> str:
+    """Render the archive-integrity warning banner."""
+    extra = f'<span class="sub">{sub}</span>' if sub else ""
+    return (
+        f'<div class="integrity-banner">⚠️ Data integrity notice — '
+        f'{INTEGRITY_NOTICE}{extra}</div>\n'
+    )
+
+
+def _is_affected(date_str: str) -> bool:
+    """True when *date_str* precedes the integrity cutoff."""
+    return date_str < INTEGRITY_CUTOFF_DATE
+
+
 def _render_page(*, title: str, content_html: str, root: str = "../") -> str:
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     return _PAGE_TMPL.format(
@@ -216,6 +258,12 @@ def _build_report_page(date_str: str, md_text: str, *, prev_date: str | None, ne
         nav_links.append(f'<a href="{prev_date}.html">Newer: {prev_date} →</a>')
 
     content = ""
+    # Integrity notice first: it governs how everything below should be read.
+    if _is_affected(date_str):
+        content += _integrity_banner(
+            f"This report is dated {date_str}. It is retained unaltered for "
+            f"audit; it has not been recomputed."
+        )
     if alert:
         content += '<div class="alert-banner">🚨 Urgent signals detected — review route table below</div>\n'
     content += body_html
@@ -225,13 +273,27 @@ def _build_report_page(date_str: str, md_text: str, *, prev_date: str | None, ne
 
 
 def _build_archive_page(reports: list[tuple[str, Path]]) -> str:
+    affected = [d for d, _ in reports if _is_affected(d)]
+
     items = "\n".join(
-        f'  <li><a href="{date}.html">Weekly Report — {date}</a></li>'
+        f'  <li><a href="{date}.html">Weekly Report — {date}</a>'
+        + (' <span class="sub">⚠️ contains unmarked synthetic data</span>'
+           if _is_affected(date) else "")
+        + "</li>"
         for date, _ in reports
     )
+
+    banner = ""
+    if affected:
+        banner = _integrity_banner(
+            f"{len(affected)} of {len(reports)} reports in this archive are "
+            f"affected. They are retained unaltered rather than deleted, so the "
+            f"record stays auditable."
+        )
+
     content = f"""\
 <h1>Report Archive</h1>
-<p>All weekly freight rate reports, newest first.</p>
+{banner}<p>All weekly freight rate reports, newest first.</p>
 <ul class="archive-list">
 {items}
 </ul>
