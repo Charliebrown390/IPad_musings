@@ -69,7 +69,21 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add fbx_structure_dump.txt fbx_raw_table.html fbx_page.png || true
+          # Stage each artifact individually. `git add a b c` aborts and
+          # stages *nothing* if any one pathspec is missing, and `|| true`
+          # would hide that — so a partial capture (the script exits 1 having
+          # written only some files) would commit nothing at all, which is
+          # precisely the case these artifacts are needed for.
+          STAGED=0
+          for f in fbx_structure_dump.txt fbx_raw_table.html fbx_page.png; do
+            if [ -f "$f" ]; then
+              git add "$f" && STAGED=$((STAGED + 1))
+              echo "staged   $f ($(wc -c < "$f") bytes)"
+            else
+              echo "MISSING  $f — not produced by this run"
+            fi
+          done
+          echo "staged $STAGED of 3 artifacts"
 
           if git diff --cached --quiet; then
             echo "Nothing to commit — no artifacts produced or no change."
