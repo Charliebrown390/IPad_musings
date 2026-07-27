@@ -1,0 +1,326 @@
+wait_state     : table selector timed out (TimeoutError); dumping anyway
+
+==============================================================================
+RUN METADATA
+==============================================================================
+
+url            : https://fbx.freightos.com/
+captured_at    : 2026-07-27T14:01:24.145484+00:00
+page_title     : Freightos Baltic Index (FBX): Freight Rate Container Price Index
+viewport       : {'width': 1600, 'height': 1200}
+
+==============================================================================
+TABLES FOUND: 1
+==============================================================================
+
+
+--- TABLE 0 ---
+(no <th>; headers taken from the first row)
+HEADERS (3): ['', '', '']
+TOTAL ROWS: 9
+
+  ROW 0:
+    cells      : ['', '', '']
+    fbx_code   : (none found)
+    lane_label : (none found)
+    rate_values: (none found)
+
+  ROW 1:
+    cells      : ['', '', '']
+    fbx_code   : (none found)
+    lane_label : (none found)
+    rate_values: (none found)
+
+  ROW 2:
+    cells      : ['', '', '']
+    fbx_code   : (none found)
+    lane_label : (none found)
+    rate_values: (none found)
+
+  ROW 3:
+    cells      : ['', '', '']
+    fbx_code   : (none found)
+    lane_label : (none found)
+    rate_values: (none found)
+
+  ROW 4:
+    cells      : ['', '', '']
+    fbx_code   : (none found)
+    lane_label : (none found)
+    rate_values: (none found)
+
+  ROW 5:
+    cells      : ['', '', '']
+    fbx_code   : (none found)
+    lane_label : (none found)
+    rate_values: (none found)
+
+  ROW 6:
+    cells      : ['', '', '']
+    fbx_code   : (none found)
+    lane_label : (none found)
+    rate_values: (none found)
+
+  ROW 7:
+    cells      : ['', '', '']
+    fbx_code   : (none found)
+    lane_label : (none found)
+    rate_values: (none found)
+
+==============================================================================
+UNIT AND CURRENCY STRINGS (whole page)
+==============================================================================
+
+  $3,665
+  $6,212
+  $429
+  $9,002
+  $520
+  $5,575
+  $541
+  $6,697
+  $675
+  $524
+  $2,067
+  $1,250
+  $2,468
+  Freightos Baltic Index (FBX):
+  Global Container Price Index
+  The FBX international ocean freight container pricing index measures 40′ container prices. It is the only IOSCO-compliant container freight index, ready for index-linked contracts and derivatives. It is traded on the Singapore Exchange and the Chicago Mercantile Exchange. This index is created in collaboration with the Baltic Exchange.
+  FREIGHTOS BALTIC INDEX (FBX): GLOBAL CONTAINER FREIGHT INDEX
+  $3,664.60
+  Click on Any FBX Index Below for More Information
+  The Freightos Baltic Index provides comprehensive visibility into world freight rates and freight data, tracking container pricing across all major global shipping lanes. Unlike regional indices, our international coverage provides logistics professionals with complete market transparency, whether shipping from Asia to Europe, North America to South America, or any major trade route worldwide.
+  Check out this week's freight update from Freightos, with the latest on increasing demand and container rates.
+  Estimated Average Container Transit Times and Pricing Trends
+  What is the Freightos Baltic Index?
+  What Data Does the Freightos Baltic Index Use?
+  How Is Our Ocean Freight Index Better Than the Shanghai Freight Index?
+  How does FBX compare to other shipping container price indices?
+  Baltic Index (FBX)
+
+==============================================================================
+EXPLICIT FEU / TEU MENTIONS
+==============================================================================
+
+  FEU   : 0 mention(s)
+  TEU   : 0 mention(s)
+  40ft  : 0 mention(s)
+  40'   : 0 mention(s)
+  20ft  : 0 mention(s)
+  20'   : 0 mention(s)
+
+==============================================================================
+FULL PAGE TEXT (first 400 lines)
+==============================================================================
+
+  Skip to content
+  Contact Us
+  Log In
+  Freightos
+  Importers & Exporters
+  Forwarders
+  Carriers
+  Resources
+  About
+  Get Product Demo
+  FBX:
+  $3,665
+  -4.88%
+  FBX01:
+  $6,212
+  -12.09%
+  FBX02:
+  $429
+  +0%
+  FBX03:
+  $9,002
+  -1.1%
+  FBX04:
+  $520
+  -1.25%
+  FBX11:
+  $5,575
+  -2.86%
+  FBX12:
+  $541
+  -1.21%
+  FBX13:
+  $6,697
+  -2.26%
+  FBX14:
+  $675
+  -0.03%
+  FBX21:
+  $524
+  -1.47%
+  FBX22:
+  $2,067
+  -0.05%
+  FBX24:
+  $1,250
+  -0.46%
+  FBX26:
+  $2,468
+  -0.02%
+  FBX:
+  $3,665
+  -4.88%
+  FBX01:
+  $6,212
+  -12.09%
+  FBX02:
+  $429
+  +0%
+  FBX03:
+  $9,002
+  -1.1%
+  FBX04:
+  $520
+  -1.25%
+  FBX11:
+  $5,575
+  -2.86%
+  FBX12:
+  $541
+  -1.21%
+  FBX13:
+  $6,697
+  -2.26%
+  FBX14:
+  $675
+  -0.03%
+  FBX21:
+  $524
+  -1.47%
+  FBX22:
+  $2,067
+  -0.05%
+  FBX24:
+  $1,250
+  -0.46%
+  FBX26:
+  $2,468
+  -0.02%
+  Global Freight Pricing
+  & Market Rate Trends
+  Freightos Baltic Index (FBX):
+  Global Container Price Index
+  The FBX international ocean freight container pricing index measures 40′ container prices. It is the only IOSCO-compliant container freight index, ready for index-linked contracts and derivatives. It is traded on the Singapore Exchange and the Chicago Mercantile Exchange. This index is created in collaboration with the Baltic Exchange.
+  FBX
+  FREIGHTOS BALTIC INDEX (FBX): GLOBAL CONTAINER FREIGHT INDEX
+  FBX Chart
+  FBX
+  Chart visualization requires Chart.js library
+  CURRENT FBX
+  $3,664.60
+  VOLATILITY
+  0.59 %
+  VIEW DATA FOR FREE →
+  Click on Any FBX Index Below for More Information
+  FBX 01
+  CHINA/EAST ASIA TO NORTH AMERICA WEST COAST
+  FBX 02
+  NORTH AMERICA WEST COAST TO CHINA/EAST ASIA
+  FBX 03
+  CHINA/EAST ASIA TO NORTH AMERICA EAST COAST
+  FBX 04
+  NORTH AMERICA EAST COAST – CHINA/EAST ASIA
+  FBX 11
+  CHINA/EAST ASIA TO NORTHERN EUROPE
+  FBX 12
+  NORTH EUROPE TO CHINA/EAST ASIA
+  FBX 13
+  CHINA/EAST ASIA TO MEDITERRANEAN
+  FBX 14
+  MEDITERRANEAN TO CHINA/EAST ASIA
+  FBX 21
+  NORTH AMERICA EAST COAST TO NORTH EUROPE
+  FBX 22
+  NORTH EUROPE TO NORTH AMERICA EAST COAST
+  FBX 24
+  EUROPE TO SOUTH AMERICA EAST COAST
+  FBX 26
+  EUROPE TO SOUTH AMERICA WEST COAST
+  Download the FBX Guide to
+  FBX Methodology and Oversight
+  Download Now
+  Trusted by Leading
+  Supply Chain Experts
+  World Freight
+  Rates
+  The Freightos Baltic Index provides comprehensive visibility into world freight rates and freight data, tracking container pricing across all major global shipping lanes. Unlike regional indices, our international coverage provides logistics professionals with complete market transparency, whether shipping from Asia to Europe, North America to South America, or any major trade route worldwide.
+  Our worldwide freight rate data is aggregated from actual carrier transactions, not surveys or estimates, making it the most accurate reflection of what shippers are truly paying in the global marketplace. Utilize these real-world freight rates to benchmark your shipping costs, forecast budget requirements, and determine the most cost-effective routing options for your global supply chain.
+  OCEAN FREIGHT PRICING NEWS
+  Recent Global Freight Events: Congestion, Labor, Strikes & More
+  Supply chain decisions for ocean freight need more than pricing and transit time information. Freightos Terminal’s key event feed keeps you informed on congestion, weather conditions, holidays, labor disputes and more, improving both long-term planning and real-time situation awareness across your organization.
+  Market Changes
+  High
+  July 8, 2026
+  Check out this week's freight update from Freightos, with the latest on increasing demand and container rates.
+  Market Changes
+  Medium
+  July 4, 2026
+  Global oil prices have plummeted as the U.S.-Iran peace deal unleashes a massive wave of over 60 million trapped crude barrels, shifting the market from a wartime capacity deficit into a significant supply glut.
+  Congestion
+  High
+  July 2, 2026
+  Severe weather, cargo frontloading, and intense vessel bunching have driven global port congestion to a four-year high, forcing ocean carriers to blank sailings and drop port calls across both mainline east-west and intra-Asia shipping networks.
+  View More Key Events
+  Ocean Freight Procurement Data & Timelines
+  Estimated Average Container Transit Times and Pricing Trends
+  Transit time data is subject to change. Using the Freightos Terminal dashboard gives you access to up-to-date transit time information.
+  Join 65k+ supply chain pros who never miss our weekly updates!
+  I consent to receive logistics research, freight tech, and commercial emails. And don’t worry, you can always take it back with a button click.*
+  Keep Me Updated!
+  Frequently Asked Questions About FBX
+  What is the Freightos Baltic Index?
+  What Data Does the Freightos Baltic Index Use?
+  How Is FBX Calculated?
+  Which Trade Lanes Does FBX Cover?
+  Which Ports Represent Each Region?
+  How Is Our Ocean Freight Index Better Than the Shanghai Freight Index?
+  Can I Source FBX Freight Data?
+  How does FBX compare to other shipping container price indices?
+  Explore Freightos Terminal
+  Freight Rate Forecasting
+  Rate Benchmarking
+  Freight Rate Calculator
+  Home
+   Enterprise
+   Terminal
+   Baltic Index (FBX)
+  SERVICES
+  Compare Live Rates
+  Freight Forwarder Solutions
+  Enterprise Shipper Solutions
+  Air & Ocean Carrier Solutions
+  Customs Brokerage Solutions
+  Embeddable Developer Widgets
+  LEARNING
+  Help Center
+  Freight Glossary
+  Shipping Lanes Map
+  Import/Export Calculators
+  Freight Resources for SMBs
+  Historical Ocean Freight Rates
+  Airlines
+  COMPANY
+  About
+  Contact
+  Careers
+  Press Releases
+  Upcoming Events
+  Investor Relations
+  Freightos © 2011-2026
+  Privacy Policy
+  Terms & Conditions
+  Cookie Notice
+  SOC 2 Type II compliant
+
+==============================================================================
+ARTIFACTS
+==============================================================================
+
+  table container HTML saved via selector 'table' (6283 bytes)
+  screenshot saved to fbx_page.png
