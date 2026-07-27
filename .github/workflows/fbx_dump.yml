@@ -104,8 +104,21 @@ jobs:
             RUN_DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
             # The tag is what the job-level guard above looks for.
             git commit -m "chore: FBX page structure dump [${RUN_DATE}] [skip dump]"
-            # Push back to the branch this run was dispatched on. The
-            # repository's default branch is claude/freight-tracker-setup-viLxr;
-            # there is no 'main', so hardcoding one would fail the push.
-            git push origin HEAD:${{ github.ref_name }}
+
+            BRANCH="${{ github.ref_name }}"
+
+            # The branch can move between checkout and push — this repo is
+            # committed to from other sessions — so re-sync first rather than
+            # losing the run to a non-fast-forward.
+            git pull --rebase --autostash origin "$BRANCH" \
+              || echo "rebase onto origin/$BRANCH failed; attempting push regardless"
+
+            if git push origin "HEAD:$BRANCH"; then
+              echo "pushed to $BRANCH"
+            else
+              echo "push rejected; re-syncing and retrying once"
+              sleep 5
+              git pull --rebase --autostash origin "$BRANCH" || true
+              git push origin "HEAD:$BRANCH"
+            fi
           fi
