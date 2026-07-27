@@ -5,7 +5,7 @@ RUN METADATA
 ==============================================================================
 
 url            : https://fbx.freightos.com/
-captured_at    : 2026-07-27T14:01:24.145484+00:00
+captured_at    : 2026-07-27T14:46:41.492588+00:00
 page_title     : Freightos Baltic Index (FBX): Freight Rate Container Price Index
 viewport       : {'width': 1600, 'height': 1200}
 
