@@ -23,6 +23,7 @@ Signal types produced
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
@@ -33,6 +34,7 @@ from database.db import (
     get_latest_rates,
     get_input_cost_history,
     insert_signal,
+    log_data_quality_issue,
 )
 from analysis.route_normaliser import normalise_route
 
@@ -45,6 +47,13 @@ SPIKE_MOMENTUM_PCT = 10.0          # WoW % above this → SPIKE
 COOLING_MOMENTUM_PCT = -5.0        # WoW % below this → COOLING
 DIVERGENCE_THRESHOLD_PCT = 15.0    # FBX vs WCI spread → DIVERGENCE
 STRESS_THRESHOLD_PCT = 40.0        # route above 12W avg → STRESS
+
+# A rate whose week_ending is older than this is treated as stale: it is
+# excluded from cross-index DIVERGENCE comparisons and from the inflationary
+# pressure composite, and is flagged in the report. Without this, a dead
+# scraper's last value silently masquerades as current — comparing a
+# four-month-old WCI print against a live FBX print manufactures divergence.
+STALE_THRESHOLD_DAYS = 14
 # Key EU lanes watched for stress. Canonical IDs, so no spelling variants
 # need listing — the normaliser resolves every scraper's wording to these.
 STRESS_ROUTES = {
@@ -154,36 +163,138 @@ def _stress_flag(route: str, series: pd.Series) -> tuple[str | None, float | Non
     return None, None
 
 
-def _divergence_flag(
-    route: str,
-    df_all: pd.DataFrame,
-) -> tuple[str | None, float | None, float | None]:
+def data_age_days(week_ending: Any, as_of: datetime | None = None) -> int | None:
     """
-    Compare the latest FBX and WCI rates for the canonical lane *route*.
+    Age in whole days of a rate dated *week_ending*, measured at report time.
+
+    Returns None when the date cannot be parsed.
+    """
+    if week_ending is None:
+        return None
+    ts = pd.to_datetime(week_ending, errors="coerce")
+    if pd.isna(ts):
+        return None
+    reference = as_of or datetime.now(timezone.utc)
+    # Compare naive-to-naive; week_ending carries no timezone.
+    ref_naive = reference.replace(tzinfo=None)
+    return max(0, (ref_naive - ts.to_pydatetime().replace(tzinfo=None)).days)
+
+
+def is_stale(week_ending: Any, as_of: datetime | None = None) -> bool:
+    """True when a rate is older than STALE_THRESHOLD_DAYS."""
+    age = data_age_days(week_ending, as_of)
+    return age is not None and age > STALE_THRESHOLD_DAYS
+
+
+def check_index_staleness(
+    latest_rates: list[dict[str, Any]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """
+    Report every index whose freshest observation is stale, and record each
+    one in ``data_quality_log`` so a scraper that dies is traceable to the run
+    on which it first went quiet.
 
     Returns
     -------
-    ("DIVERGENCE", fbx_rate, wci_rate)  or  (None, fbx_rate, wci_rate)
-    The rates may be None if the index has no data for this lane.
+    dict keyed by index name: {"last_week": str, "age_days": int}
+    """
+    if latest_rates is None:
+        latest_rates = get_latest_rates()
+
+    freshest: dict[str, str] = {}
+    for row in latest_rates:
+        idx, week = row.get("index_name"), row.get("week_ending")
+        if not idx or not week:
+            continue
+        if idx not in freshest or str(week) > freshest[idx]:
+            freshest[idx] = str(week)
+
+    stale: dict[str, dict[str, Any]] = {}
+    for idx, week in sorted(freshest.items()):
+        age = data_age_days(week)
+        if age is None or age <= STALE_THRESHOLD_DAYS:
+            continue
+        stale[idx] = {"last_week": week, "age_days": age}
+        logger.warning(
+            "STALE INDEX %s: no data since %s (%d days). Excluded from "
+            "divergence checks and the inflation composite.", idx, week, age,
+        )
+        try:
+            log_data_quality_issue(
+                issue_type="stale_index",
+                index_name=idx,
+                week_ending=week,
+                notes=(f"{idx} last reported {week} ({age} days ago); "
+                       f"threshold is {STALE_THRESHOLD_DAYS} days"),
+            )
+        except Exception as exc:   # logging must never break the pipeline
+            logger.debug("check_index_staleness: could not persist issue: %s", exc)
+
+    if not stale:
+        logger.info("check_index_staleness: all indices fresh")
+    return stale
+
+
+def _divergence_flag(
+    route: str,
+    df_all: pd.DataFrame,
+    as_of: datetime | None = None,
+) -> tuple[str | None, float | None, float | None, dict[str, int | None]]:
+    """
+    Compare the latest FBX and WCI rates for the canonical lane *route*.
+
+    A rate older than STALE_THRESHOLD_DAYS is still returned for display but
+    takes no part in the divergence test — a dead scraper's last print is not
+    evidence that two live indices disagree.
+
+    Returns
+    -------
+    (label, fbx_rate, wci_rate, ages)
+        label : "DIVERGENCE" or None
+        ages  : {"fbx": age_days|None, "wci": age_days|None}
     """
     route_df = df_all[df_all["canonical_route_id"] == route]
 
     fbx_rows = route_df[route_df["index_name"].str.contains("FBX|Freightos", case=False, na=False)]
     wci_rows = route_df[route_df["index_name"].str.contains("WCI|Drewry", case=False, na=False)]
 
-    fbx_rate = fbx_rows.sort_values("week_ending").iloc[-1]["rate_usd"] if not fbx_rows.empty else None
-    wci_rate = wci_rows.sort_values("week_ending").iloc[-1]["rate_usd"] if not wci_rows.empty else None
+    def _latest(rows: pd.DataFrame) -> tuple[float | None, Any]:
+        if rows.empty:
+            return None, None
+        row = rows.sort_values("week_ending").iloc[-1]
+        return row["rate_usd"], row["week_ending"]
+
+    fbx_rate, fbx_week = _latest(fbx_rows)
+    wci_rate, wci_week = _latest(wci_rows)
+
+    ages = {
+        "fbx": data_age_days(fbx_week, as_of),
+        "wci": data_age_days(wci_week, as_of),
+    }
+
+    fbx_stale = fbx_rate is not None and is_stale(fbx_week, as_of)
+    wci_stale = wci_rate is not None and is_stale(wci_week, as_of)
+
+    rounded_fbx = round(fbx_rate, 2) if fbx_rate is not None else None
+    rounded_wci = round(wci_rate, 2) if wci_rate is not None else None
 
     if fbx_rate is None or wci_rate is None:
-        return None, fbx_rate, wci_rate
+        return None, rounded_fbx, rounded_wci, ages
+
+    if fbx_stale or wci_stale:
+        logger.debug(
+            "divergence skipped for %s: stale input (fbx=%sd, wci=%sd)",
+            route, ages["fbx"], ages["wci"],
+        )
+        return None, rounded_fbx, rounded_wci, ages
 
     mean_rate = (fbx_rate + wci_rate) / 2
     if mean_rate == 0:
-        return None, fbx_rate, wci_rate
+        return None, rounded_fbx, rounded_wci, ages
 
     spread_pct = abs(fbx_rate - wci_rate) / mean_rate * 100
     label = "DIVERGENCE" if spread_pct >= DIVERGENCE_THRESHOLD_PCT else None
-    return label, round(fbx_rate, 2), round(wci_rate, 2)
+    return label, rounded_fbx, rounded_wci, ages
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +355,29 @@ def _fetch_freight_composite_weekly(weeks: int = _NORM_WEEKS) -> pd.Series:
 
     df = pd.DataFrame(all_rows)
     df["week_ending"] = pd.to_datetime(df["week_ending"])
+
+    # Drop indices whose freshest print is stale. A dead scraper's last value
+    # would otherwise be carried into the composite as if it were current,
+    # anchoring the 4-week change against a months-old observation.
+    if "index_name" in df.columns:
+        freshest = df.groupby("index_name")["week_ending"].max()
+        stale_indices = [idx for idx, wk in freshest.items() if is_stale(wk)]
+        if stale_indices:
+            kept = df[~df["index_name"].isin(stale_indices)]
+            if kept.empty:
+                logger.warning(
+                    "inflation_score: every index is stale (%s); "
+                    "retaining stale data rather than emptying the composite",
+                    ", ".join(sorted(stale_indices)),
+                )
+            else:
+                logger.warning(
+                    "inflation_score: excluding stale index/indices from the "
+                    "freight composite: %s",
+                    ", ".join(f"{i} (last {freshest[i]:%Y-%m-%d})" for i in sorted(stale_indices)),
+                )
+                df = kept
+
     # Weekly mean across all routes and indices
     weekly = df.groupby("week_ending")["rate_usd"].mean().sort_index()
     weekly.index = weekly.index.to_period("W").to_timestamp("W")  # align to week-end
@@ -480,11 +614,14 @@ def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
         window = min(4, len(agg_series))
         four_week_avg = round(agg_series.iloc[-window:].mean(), 2) if window > 0 else None
 
-        # 3. Cross-index divergence (FBX vs WCI)
-        div_label, fbx_rate, wci_rate = _divergence_flag(route, df)
+        # 3. Cross-index divergence (FBX vs WCI); stale inputs are excluded
+        div_label, fbx_rate, wci_rate, index_ages = _divergence_flag(route, df)
 
         # 4. Geopolitical stress proxy
         stress_label, stress_pct = _stress_flag(route, agg_series)
+
+        # 5. Freshness of this lane's most recent observation
+        lane_age = data_age_days(route_df["week_ending"].max())
 
         results[route] = {
             "wow_pct":          wow,
@@ -497,6 +634,10 @@ def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
             "stress_pct_above": stress_pct,
             "inflation_score":  0.0,   # back-filled below
             "four_week_avg":    four_week_avg,
+            "data_age_days":    lane_age,
+            "is_stale":         lane_age is not None and lane_age > STALE_THRESHOLD_DAYS,
+            "fbx_age_days":     index_ages["fbx"],
+            "wci_age_days":     index_ages["wci"],
             "inflationary_pressure_breakdown": {},  # back-filled below
         }
 

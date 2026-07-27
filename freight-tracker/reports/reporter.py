@@ -29,6 +29,7 @@ import yaml
 
 from database.db import get_latest_rates, get_rate_history, insert_alert, get_latest_news_signal
 from analysis.route_normaliser import display_name
+from analysis.signals import STALE_THRESHOLD_DAYS, data_age_days, is_stale
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +103,12 @@ def _build_summary_table(
     Build the Route | FBX Rate | WCI Rate | WoW % | 4W Avg | Signal table.
     One row per canonical lane, merging FBX and WCI columns.
     """
-    # Index latest rates by (canonical lane, index_name) for O(1) lookup
-    rate_lookup: dict[tuple[str, str], float] = {}
+    # Index latest rates by (canonical lane, index_name), keeping the
+    # as-of week so staleness can be shown alongside the value.
+    rate_lookup: dict[tuple[str, str], tuple[float, Any]] = {}
     for row in latest_rates:
         key = (row.get("canonical_route_id") or row["route"], row["index_name"])
-        rate_lookup[key] = row["rate_usd"]
+        rate_lookup[key] = (row["rate_usd"], row.get("week_ending"))
 
     routes = sorted({r.get("canonical_route_id") or r["route"] for r in latest_rates})
 
@@ -114,19 +116,25 @@ def _build_summary_table(
     sep    = "|-------|----------|----------|-------|--------|--------|"
     rows = [header, sep]
 
+    def _pick(route: str, *needles: str) -> tuple[float | None, Any]:
+        for (r, idx), (value, week) in rate_lookup.items():
+            if r == route and any(n in idx for n in needles):
+                return value, week
+        return None, None
+
+    def _fmt_with_age(value: float | None, week: Any) -> str:
+        """Render a rate, marking it ⚠ with its as-of date when stale."""
+        if value is None:
+            return "N/A"
+        if week is not None and is_stale(week):
+            # Plain inline form: renders identically as Markdown, as HTML on
+            # the Pages site, and as plain text in a Telegram message.
+            return f"⚠ {_fmt_rate(value)} (as of {str(week)[:10]})"
+        return _fmt_rate(value)
+
     for route in routes:
-        # FBX: match Freightos
-        fbx = next(
-            (v for (r, idx), v in rate_lookup.items()
-             if r == route and ("FBX" in idx or "Freightos" in idx)),
-            None,
-        )
-        # WCI: match Drewry
-        wci = next(
-            (v for (r, idx), v in rate_lookup.items()
-             if r == route and ("WCI" in idx or "Drewry" in idx)),
-            None,
-        )
+        fbx, fbx_week = _pick(route, "FBX", "Freightos")
+        wci, wci_week = _pick(route, "WCI", "Drewry")
 
         sig = signals_by_route.get(route, {})
         wow = _fmt_pct(sig.get("wow_pct"))
@@ -134,11 +142,51 @@ def _build_summary_table(
         label = _signal_label(sig)
 
         rows.append(
-            f"| {display_name(route)} | {_fmt_rate(fbx)} | {_fmt_rate(wci)} "
-            f"| {wow} | {avg4w} | {label} |"
+            f"| {display_name(route)} | {_fmt_with_age(fbx, fbx_week)} "
+            f"| {_fmt_with_age(wci, wci_week)} | {wow} | {avg4w} | {label} |"
         )
 
     return "\n".join(rows)
+
+
+def _build_staleness_header(latest_rates: list[dict]) -> list[str]:
+    """
+    Warn about any index whose freshest data is older than the threshold.
+
+    Rendered on every report so a scraper that has quietly started failing is
+    visible immediately, rather than being discovered months later.
+    """
+    freshest: dict[str, str] = {}
+    for row in latest_rates:
+        idx = row.get("index_name")
+        week = row.get("week_ending")
+        if not idx or not week:
+            continue
+        if idx not in freshest or str(week) > freshest[idx]:
+            freshest[idx] = str(week)
+
+    stale = {
+        idx: week for idx, week in freshest.items() if is_stale(week)
+    }
+    if not stale:
+        return []
+
+    noun = "index has" if len(stale) == 1 else "indices have"
+    # Every line is prefixed with '>' including the separator, otherwise a
+    # bare blank line would terminate the blockquote.
+    lines = [
+        f"> ⚠ **STALE DATA WARNING** — {len(stale)} {noun} not reported "
+        f"in over {STALE_THRESHOLD_DAYS} days:",
+        ">",
+    ]
+    for idx, week in sorted(stale.items()):
+        age = data_age_days(week)
+        lines.append(
+            f"> - **{idx}** — last data {week} ({age} days old). "
+            f"Excluded from divergence checks and the inflation composite."
+        )
+    lines += [">", ""]
+    return lines
 
 
 def _build_news_sentiment_section(news: dict[str, Any]) -> list[str]:
@@ -210,6 +258,10 @@ def _build_markdown_report(
         f"# {header_flag}Freight Rate Weekly Report — {report_date}",
         "",
     ]
+
+    # Surface dead scrapers before anything else — every number below is only
+    # as trustworthy as the freshness of the index behind it.
+    lines += _build_staleness_header(latest_rates)
 
     if ai_summary:
         lines += [

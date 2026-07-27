@@ -93,7 +93,11 @@ from database.db import (  # noqa: E402
     init_db, insert_rates, get_latest_rates, get_rate_history,
     insert_input_costs, insert_news_signal,
 )
-from analysis.signals import generate_signals, generate_weekly_signals      # noqa: E402
+from analysis.signals import (                                              # noqa: E402
+    generate_signals,
+    generate_weekly_signals,
+    check_index_staleness,
+)
 from analysis.route_normaliser import (                                     # noqa: E402
     normalise_route,
     validate_route_coverage,
@@ -183,6 +187,10 @@ def run_now(config: dict) -> None:
     #     so a renamed upstream label is visible rather than silently minting
     #     a new route key.
     validate_route_coverage()
+
+    # 1c. Flag any index that has stopped reporting, so a silently dead
+    #     scraper shows up on this run rather than months from now.
+    check_index_staleness()
 
     # 2. Compute signals from 12-week history
     latest_rates = get_latest_rates()

@@ -110,6 +110,89 @@ def _backfill(conn: sqlite3.Connection) -> tuple[int, list[tuple[str, str]]]:
     return updated, sorted(unmapped)
 
 
+def report_collisions(db_path: Path, threshold: float = 5.0) -> int:
+    """
+    List every lane-week collision without modifying anything.
+
+    Groups rows the way the migration does — by (normalised index, canonical
+    lane, week) — and shows which row would survive the
+    ``ORDER BY scraped_at DESC, id DESC`` tie-break and what would be
+    discarded, so the choice can be audited after the fact.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT id, index_name, route, rate_usd, week_ending, scraped_at, source "
+            "FROM freight_rates"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    groups: dict[tuple[str, str, str], list[dict]] = {}
+    for r in rows:
+        key = (
+            normalise_index(r["index_name"]),
+            normalise_route(r["route"], r["index_name"]),
+            r["week_ending"],
+        )
+        groups.setdefault(key, []).append(dict(r))
+
+    collisions = {k: v for k, v in groups.items() if len(v) > 1}
+    discarded = sum(len(v) - 1 for v in collisions.values())
+
+    logger.info("=" * 78)
+    logger.info("COLLISION REPORT (read-only) — %s", db_path.name)
+    logger.info("=" * 78)
+    logger.info("%d rows, %d colliding lane-weeks, %d rows would be discarded",
+                len(rows), len(collisions), discarded)
+    logger.info("Survivor rule: ORDER BY scraped_at DESC, id DESC (freshest observation)")
+    logger.info("")
+
+    material = 0
+    by_lane: dict[tuple[str, str], list] = {}
+    for key, members in collisions.items():
+        by_lane.setdefault((key[0], key[1]), []).append((key[2], members))
+
+    for (index_name, lane), weeks in sorted(by_lane.items()):
+        logger.info("-" * 78)
+        logger.info("%s / %s  — %d colliding week(s)", index_name, lane, len(weeks))
+        for week, members in sorted(weeks):
+            ranked = sorted(
+                members, key=lambda m: (m["scraped_at"], m["id"]), reverse=True
+            )
+            keeper, losers = ranked[0], ranked[1:]
+            worst = max(
+                (_pct_gap(keeper["rate_usd"], l["rate_usd"]) for l in losers),
+                default=0.0,
+            )
+            flag = "  <<< MATERIAL" if worst > threshold else ""
+            if worst > threshold:
+                material += 1
+            logger.info("  week %s   spread %.0f%%%s", week, worst, flag)
+            logger.info("     KEPT     $%9s  %-52s  src=%s",
+                        f"{keeper['rate_usd']:,.0f}",
+                        (keeper["route"] or "")[:52], keeper["source"])
+            for l in losers:
+                logger.info("     DISCARD  $%9s  %-52s  src=%s",
+                            f"{l['rate_usd']:,.0f}",
+                            (l["route"] or "")[:52], l["source"])
+        logger.info("")
+
+    logger.info("=" * 78)
+    logger.info("%d of %d collisions exceeded the %.0f%% materiality threshold",
+                material, len(collisions), threshold)
+    logger.info("=" * 78)
+    return 0
+
+
+def _pct_gap(a: float, b: float) -> float:
+    lo, hi = sorted((abs(float(a)), abs(float(b))))
+    if lo == 0:
+        return 0.0 if hi == 0 else float("inf")
+    return (hi - lo) / lo * 100.0
+
+
 def _dedupe(conn: sqlite3.Connection) -> int:
     """
     Keep one row per (index_name, canonical_route_id, week_ending).
@@ -221,7 +304,15 @@ def main() -> int:
                         help="Path to the SQLite database")
     parser.add_argument("--dry-run", action="store_true",
                         help="Report what would change without writing")
+    parser.add_argument("--report-collisions", action="store_true",
+                        help="List every colliding lane-week and what would be "
+                             "discarded, then exit. Never modifies the database.")
+    parser.add_argument("--threshold", type=float, default=5.0,
+                        help="Materiality threshold for collisions, %% (default 5)")
     args = parser.parse_args()
+
+    if args.report_collisions:
+        return report_collisions(args.db, threshold=args.threshold)
 
     code = migrate(args.db, dry_run=args.dry_run)
 

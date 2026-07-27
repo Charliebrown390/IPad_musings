@@ -99,6 +99,24 @@ CREATE TABLE IF NOT EXISTS news_signals (
 );
 """
 
+DDL_DATA_QUALITY_LOG = """
+CREATE TABLE IF NOT EXISTS data_quality_log (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    detected_at        TEXT    NOT NULL,   -- ISO datetime UTC
+    issue_type         TEXT    NOT NULL,   -- 'rate_collision' | 'stale_index'
+    index_name         TEXT,
+    canonical_route_id TEXT,
+    week_ending        TEXT,
+    existing_value     REAL,               -- value already in the DB
+    incoming_value     REAL,               -- value being written
+    pct_difference     REAL,               -- relative gap, % of the smaller
+    existing_raw_route TEXT,               -- raw string behind existing_value
+    incoming_raw_route TEXT,               -- raw string behind incoming_value
+    winner             TEXT,               -- 'incoming' | 'existing'
+    notes              TEXT
+);
+"""
+
 DDL_INDICES = [
     "CREATE INDEX IF NOT EXISTS idx_fr_route       ON freight_rates (route);",
     "CREATE INDEX IF NOT EXISTS idx_fr_index_name  ON freight_rates (index_name);",
@@ -109,7 +127,13 @@ DDL_INDICES = [
     "CREATE INDEX IF NOT EXISTS idx_ic_indicator   ON input_costs   (indicator_name);",
     "CREATE INDEX IF NOT EXISTS idx_ic_date        ON input_costs   (date);",
     "CREATE INDEX IF NOT EXISTS idx_ns_date        ON news_signals  (date);",
+    "CREATE INDEX IF NOT EXISTS idx_dq_type        ON data_quality_log (issue_type);",
+    "CREATE INDEX IF NOT EXISTS idx_dq_detected    ON data_quality_log (detected_at);",
 ]
+
+# A collision below this threshold is treated as ordinary index noise and is
+# not logged; above it, the two sources genuinely disagree about the lane.
+COLLISION_PCT_THRESHOLD = 5.0
 
 # One physical lane may have exactly one rate per index per week.
 # Created separately from DDL_INDICES because it fails on a table that still
@@ -152,6 +176,7 @@ def init_db(db_path: Path | None = None) -> Path:
         conn.execute(DDL_ALERTS_LOG)
         conn.execute(DDL_INPUT_COSTS)
         conn.execute(DDL_NEWS_SIGNALS)
+        conn.execute(DDL_DATA_QUALITY_LOG)
         _migrate_schema(conn)
         for idx_sql in DDL_INDICES:
             conn.execute(idx_sql)
@@ -212,6 +237,87 @@ def _connect(db_path: Path | None = None) -> Generator[sqlite3.Connection, None,
 # Write operations
 # ---------------------------------------------------------------------------
 
+def _pct_difference(a: float, b: float) -> float:
+    """
+    Relative gap between two rates, as a percentage of the smaller.
+
+    Symmetric and expressed against the smaller value so a doubling reads as
+    100% rather than 50%.
+    """
+    lo, hi = sorted((abs(a), abs(b)))
+    if lo == 0:
+        return 0.0 if hi == 0 else float("inf")
+    return (hi - lo) / lo * 100.0
+
+
+def _record_collisions(
+    conn: sqlite3.Connection,
+    collisions: list[dict[str, Any]],
+) -> None:
+    """Log each collision as a WARNING and persist it to data_quality_log."""
+    detected_at = datetime.now(timezone.utc).isoformat()
+
+    for c in collisions:
+        logger.warning(
+            "RATE COLLISION %s/%s week=%s: stored $%s (%s) vs incoming "
+            "$%s (%s) — %.1f%% apart; incoming wins (last-write-wins)",
+            c["index_name"], c["canonical_route_id"], c["week_ending"],
+            f"{c['existing_value']:,.0f}", c["existing_raw_route"],
+            f"{c['incoming_value']:,.0f}", c["incoming_raw_route"],
+            c["pct_difference"],
+        )
+
+    conn.executemany(
+        """
+        INSERT INTO data_quality_log
+            (detected_at, issue_type, index_name, canonical_route_id,
+             week_ending, existing_value, incoming_value, pct_difference,
+             existing_raw_route, incoming_raw_route, winner, notes)
+        VALUES (?, 'rate_collision', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                detected_at, c["index_name"], c["canonical_route_id"],
+                c["week_ending"], c["existing_value"], c["incoming_value"],
+                round(c["pct_difference"], 2), c["existing_raw_route"],
+                c["incoming_raw_route"], c["winner"], c["notes"],
+            )
+            for c in collisions
+        ],
+    )
+    logger.warning(
+        "insert_rates: %d rate collision(s) >%.0f%% recorded in data_quality_log",
+        len(collisions), COLLISION_PCT_THRESHOLD,
+    )
+
+
+def log_data_quality_issue(
+    issue_type: str,
+    notes: str,
+    index_name: str | None = None,
+    canonical_route_id: str | None = None,
+    week_ending: str | None = None,
+    existing_value: float | None = None,
+    incoming_value: float | None = None,
+    db_path: Path | None = None,
+) -> None:
+    """Record a non-collision data-quality issue (e.g. a stale index)."""
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO data_quality_log
+                (detected_at, issue_type, index_name, canonical_route_id,
+                 week_ending, existing_value, incoming_value, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                datetime.now(timezone.utc).isoformat(), issue_type, index_name,
+                canonical_route_id, week_ending, existing_value,
+                incoming_value, notes,
+            ),
+        )
+
+
 def insert_rates(
     rates: list[dict[str, Any]],
     db_path: Path | None = None,
@@ -224,6 +330,12 @@ def insert_rates(
     INSERT OR REPLACE keyed on the UNIQUE (index_name, canonical_route_id,
     week_ending) index, so re-running a scrape updates the existing row for
     that lane and week rather than appending a near-duplicate.
+
+    Because INSERT OR REPLACE resolves collisions by last-write-wins, any
+    replacement where the incoming rate differs from the stored rate by more
+    than COLLISION_PCT_THRESHOLD is logged as a WARNING and recorded in
+    ``data_quality_log`` — two sources disagreeing about the same lane-week is
+    a data-quality signal, not something to silently overwrite.
 
     Parameters
     ----------
@@ -247,6 +359,7 @@ def insert_rates(
     scraped_at = datetime.now(timezone.utc).isoformat()
     written = 0
     unmapped_seen: set[str] = set()
+    collisions: list[dict[str, Any]] = []
 
     with _connect(db_path) as conn:
         for r in rates:
@@ -257,6 +370,42 @@ def insert_rates(
 
                 if is_unmapped(canonical):
                     unmapped_seen.add(str(raw_route))
+
+                # Inspect the row this write is about to replace, so a
+                # material disagreement is recorded rather than lost.
+                existing = conn.execute(
+                    """
+                    SELECT rate_usd, raw_route_string, route, source
+                    FROM freight_rates
+                    WHERE index_name = ? AND canonical_route_id = ?
+                      AND week_ending = ?
+                    """,
+                    (index_name, canonical, r["week_ending"]),
+                ).fetchone()
+
+                if existing is not None:
+                    incoming_rate = float(r["rate_usd_per_feu"])
+                    existing_rate = float(existing["rate_usd"])
+                    pct = _pct_difference(existing_rate, incoming_rate)
+                    if pct > COLLISION_PCT_THRESHOLD:
+                        collisions.append({
+                            "index_name": index_name,
+                            "canonical_route_id": canonical,
+                            "week_ending": r["week_ending"],
+                            "existing_value": existing_rate,
+                            "incoming_value": incoming_rate,
+                            "pct_difference": pct,
+                            "existing_raw_route": (
+                                existing["raw_route_string"] or existing["route"]
+                            ),
+                            "incoming_raw_route": str(raw_route),
+                            "winner": "incoming",
+                            "notes": (
+                                f"INSERT OR REPLACE last-write-wins; "
+                                f"existing source={existing['source']}, "
+                                f"incoming source={r.get('source_url')}"
+                            ),
+                        })
 
                 conn.execute(
                     """
@@ -279,6 +428,9 @@ def insert_rates(
                 written += conn.execute("SELECT changes()").fetchone()[0]
             except (KeyError, sqlite3.Error) as exc:
                 logger.error("insert_rates: skipping row due to error: %s | row=%s", exc, r)
+
+        if collisions:
+            _record_collisions(conn, collisions)
 
     for raw in sorted(unmapped_seen):
         logger.warning(
