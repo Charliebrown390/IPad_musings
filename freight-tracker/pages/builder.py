@@ -217,7 +217,11 @@ INTEGRITY_CUTOFF_DATE = "2026-07-27"
 
 INTEGRITY_NOTICE = (
     "Reports dated before 2026-07-27 include synthetic data for SCFI and WCI "
-    "that was not marked as such. Figures in these reports are not reliable."
+    "that was not marked as such. Separately, the input_costs table held 280 "
+    "synthetic rows and carried no is_synthetic column, so the bunker and "
+    "crude components — and therefore the headline inflationary pressure "
+    "score — were computed on a mix of real and fabricated data in every one "
+    "of these reports. Figures in these reports are not reliable."
 )
 
 

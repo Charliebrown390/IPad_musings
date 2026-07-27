@@ -202,6 +202,52 @@ _COMPONENT_LABELS = {
     "bdi":    "Baltic Dry Index",
 }
 
+# Running list of changes that moved the min-max scales underneath the
+# component scores. A score is only comparable to another computed under the
+# same scale, so each break is dated and kept — a single undated note cannot
+# tell a reader which side of which change a given archived report sits on.
+#
+# Append a new entry whenever a change alters the data feeding the
+# normalisation window: the rows included, their provenance, or their units.
+# Newest first.
+SCALE_BREAKS: list[dict[str, str]] = [
+    {
+        "date": "2026-07-27",
+        "change": "Synthetic rows excluded from the normalisation history",
+        "effect": (
+            "168 seed rows in freight_rates, and 280 in input_costs, were "
+            "removed from the windows behind every component. The bunker and "
+            "crude scales moved most: both had been built on real and "
+            "fabricated observations mixed together."
+        ),
+    },
+]
+
+
+def _build_scale_break_note() -> list[str]:
+    """
+    Render the running list of scale breaks.
+
+    Presented as a dated list rather than one note so a reader comparing two
+    reports can see exactly which breaks fall between them.
+    """
+    if not SCALE_BREAKS:
+        return []
+
+    newest = SCALE_BREAKS[0]["date"]
+    lines = [
+        f"> ℹ️ **Scale breaks** — component scores are min-max normalised, so "
+        f"they are only comparable across reports that share the same scale. "
+        f"Scores in reports published before {newest} are **not** comparable "
+        f"to these. Changes that moved the scales, newest first:",
+        ">",
+    ]
+    for brk in SCALE_BREAKS:
+        lines.append(
+            f"> - **{brk['date']} — {brk['change']}.** {brk['effect']}"
+        )
+    return lines
+
 
 def _build_normalisation_notes(breakdown: dict[str, Any]) -> list[str]:
     """
@@ -239,13 +285,10 @@ def _build_normalisation_notes(breakdown: dict[str, Any]) -> list[str]:
             f"weights are redistributed proportionally."
         )
 
-    # Task 3: scale-shift disclosure.
-    notes.append(
-        "> ℹ️ **Not comparable to earlier reports** — synthetic rows were "
-        "removed from the normalisation history on 2026-07-27. The min-max "
-        "scales shifted as a result, so component scores in reports published "
-        "before that date do not sit on the same scale as these."
-    )
+    scale_note = _build_scale_break_note()
+    if scale_note:
+        # Already multi-line; join so the interleaver treats it as one block.
+        notes.append("\n".join(scale_note))
 
     if not notes:
         return []
