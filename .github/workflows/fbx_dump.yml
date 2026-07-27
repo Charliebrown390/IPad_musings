@@ -1,0 +1,83 @@
+name: FBX Structure Dump (one-off evidence)
+
+# Manual only. This captures what the Freightos FBX page actually publishes —
+# lane labels and rate units — so the hardcoded KNOWN_ROUTES mapping can be
+# corrected from evidence. It collects data; it changes no scraper logic.
+#
+# It exists as a workflow because fbx.freightos.com is unreachable from the
+# development sandbox (egress policy 403) but is reachable from the Actions
+# runner, which is where every real row in the database came from.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to commit the artifacts back
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  dump:
+    name: Render FBX page → dump structure
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: freight-tracker/requirements.txt
+
+      - name: Install Python dependencies
+        working-directory: freight-tracker
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
+        working-directory: freight-tracker
+        run: playwright install chromium --with-deps
+
+      - name: Dump FBX page structure
+        working-directory: freight-tracker
+        run: python scripts/dump_fbx_structure.py
+
+      # Always surface the artifacts, including on a partial capture — a run
+      # that found no table still produces a dump worth reading.
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fbx-structure-dump-${{ github.run_id }}
+          path: |
+            freight-tracker/fbx_structure_dump.txt
+            freight-tracker/fbx_raw_table.html
+            freight-tracker/fbx_page.png
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Commit artifacts back to the repository
+        if: always()
+        working-directory: freight-tracker
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add fbx_structure_dump.txt fbx_raw_table.html fbx_page.png || true
+
+          if git diff --cached --quiet; then
+            echo "Nothing to commit — no artifacts produced or no change."
+          else
+            RUN_DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
+            git commit -m "chore: FBX page structure dump [${RUN_DATE}] [skip ci]"
+            # Push back to the branch this run was dispatched on. The
+            # repository's default branch is claude/freight-tracker-setup-viLxr;
+            # there is no 'main', so hardcoding one would fail the push.
+            git push origin HEAD:${{ github.ref_name }}
+          fi
