@@ -32,17 +32,29 @@ DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "freight.db"
 # Schema
 # ---------------------------------------------------------------------------
 
-DDL_FREIGHT_RATES = """
+# observation_date is the date the rate was actually observed. Indices do not
+# share a publication cadence: FBX prints daily, SCFI/WCI weekly. Storing the
+# true observation date and deriving the week from it keeps daily fidelity
+# while letting weekly statistics be computed correctly.
+#
+# week_ending is a VIRTUAL generated column: the Sunday on or after
+# observation_date (Mon–Sun weeks). It is derived, never written, so it can
+# never drift out of step with observation_date.
+WEEK_ENDING_EXPR = "date(observation_date, 'weekday 0')"
+
+DDL_FREIGHT_RATES = f"""
 CREATE TABLE IF NOT EXISTS freight_rates (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     index_name        TEXT    NOT NULL,
     route             TEXT    NOT NULL,
     rate_usd          REAL    NOT NULL,
-    week_ending       TEXT    NOT NULL,   -- ISO date YYYY-MM-DD
+    observation_date  TEXT    NOT NULL,   -- ISO date YYYY-MM-DD, as observed
     scraped_at        TEXT    NOT NULL,   -- ISO datetime
     source            TEXT    NOT NULL,
     canonical_route_id TEXT,              -- e.g. 'CN_NEUR'; drives ALL joins/WoW
-    raw_route_string   TEXT               -- scraper's original label, audit only
+    raw_route_string   TEXT,              -- scraper's original label, audit only
+    is_synthetic      INTEGER NOT NULL DEFAULT 0,  -- 1 = seeded/fabricated
+    week_ending       TEXT GENERATED ALWAYS AS ({WEEK_ENDING_EXPR}) VIRTUAL
 );
 """
 
@@ -52,6 +64,8 @@ CREATE TABLE IF NOT EXISTS freight_rates (
 MIGRATIONS_FREIGHT_RATES = [
     ("canonical_route_id", "ALTER TABLE freight_rates ADD COLUMN canonical_route_id TEXT"),
     ("raw_route_string",   "ALTER TABLE freight_rates ADD COLUMN raw_route_string TEXT"),
+    ("is_synthetic",
+     "ALTER TABLE freight_rates ADD COLUMN is_synthetic INTEGER NOT NULL DEFAULT 0"),
 ]
 
 DDL_RATE_SIGNALS = """
@@ -135,13 +149,23 @@ DDL_INDICES = [
 # not logged; above it, the two sources genuinely disagree about the lane.
 COLLISION_PCT_THRESHOLD = 5.0
 
-# One physical lane may have exactly one rate per index per week.
+# One physical lane may have exactly one rate per index per observation date.
+#
+# Keyed on observation_date rather than week_ending because FBX publishes
+# daily: keying on the derived week would make six of every seven daily prints
+# a constraint violation. Keyed on is_synthetic as well so a quarantined seed
+# row and the real observation it once displaced can coexist — the real row is
+# what statistics read, the synthetic one stays for audit.
+#
 # Created separately from DDL_INDICES because it fails on a table that still
 # holds pre-normalisation duplicates — see _ensure_unique_lane_index().
 DDL_UNIQUE_LANE = (
-    "CREATE UNIQUE INDEX IF NOT EXISTS uq_fr_lane_week "
-    "ON freight_rates (index_name, canonical_route_id, week_ending);"
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_fr_lane_obs "
+    "ON freight_rates (index_name, canonical_route_id, observation_date, is_synthetic);"
 )
+
+# The pre-rename index; dropped during migration so it cannot conflict.
+DDL_DROP_LEGACY_UNIQUE = "DROP INDEX IF EXISTS uq_fr_lane_week;"
 
 
 # ---------------------------------------------------------------------------
@@ -187,30 +211,73 @@ def init_db(db_path: Path | None = None) -> Path:
     return path
 
 
+def _columns(conn: sqlite3.Connection) -> set[str]:
+    """
+    All column names on freight_rates, generated columns included.
+
+    table_xinfo, not table_info: the latter omits VIRTUAL generated columns,
+    so a guard built on it would try to re-add week_ending on every run.
+    """
+    return {row[1] for row in conn.execute("PRAGMA table_xinfo(freight_rates)")}
+
+
 def _migrate_schema(conn: sqlite3.Connection) -> None:
-    """Add columns introduced after the table's first release, idempotently."""
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(freight_rates)")}
+    """Bring an existing freight_rates table up to the current shape."""
+    existing = _columns(conn)
+
+    # week_ending used to be a stored column holding whatever date the scraper
+    # supplied — daily for FBX, weekly for others. Rename it to the honest
+    # name and re-expose week_ending as a derived value.
+    if "observation_date" not in existing:
+        if "week_ending" in existing:
+            conn.execute(
+                "ALTER TABLE freight_rates RENAME COLUMN week_ending TO observation_date"
+            )
+            logger.info(
+                "_migrate_schema: renamed freight_rates.week_ending -> observation_date"
+            )
+        else:
+            conn.execute(
+                "ALTER TABLE freight_rates ADD COLUMN observation_date TEXT"
+            )
+            logger.info("_migrate_schema: added freight_rates.observation_date")
+        existing = _columns(conn)
+
     for column, ddl in MIGRATIONS_FREIGHT_RATES:
         if column not in existing:
             conn.execute(ddl)
             logger.info("_migrate_schema: added freight_rates.%s", column)
 
+    # Re-add week_ending as a derived column. SQLite permits adding a VIRTUAL
+    # generated column via ALTER TABLE (a STORED one it does not), which suits
+    # us: computed on read, so it can never disagree with observation_date.
+    existing = _columns(conn)
+    if "week_ending" not in existing:
+        conn.execute(
+            f"ALTER TABLE freight_rates ADD COLUMN week_ending TEXT "
+            f"GENERATED ALWAYS AS ({WEEK_ENDING_EXPR}) VIRTUAL"
+        )
+        logger.info("_migrate_schema: added generated freight_rates.week_ending")
+
 
 def _ensure_unique_lane_index(conn: sqlite3.Connection) -> bool:
     """
-    Create the (index_name, canonical_route_id, week_ending) UNIQUE index.
+    Create the (index_name, canonical_route_id, observation_date, is_synthetic)
+    UNIQUE index, dropping the superseded week_ending-keyed one first.
 
     Returns False without raising when the table still holds pre-normalisation
     duplicates — the caller is told to run ``migrate_routes.py``, which
     de-duplicates and then installs the index.
     """
     try:
+        conn.execute(DDL_DROP_LEGACY_UNIQUE)
         conn.execute(DDL_UNIQUE_LANE)
         return True
     except sqlite3.IntegrityError:
         logger.warning(
             "UNIQUE lane index not created: freight_rates still contains "
-            "duplicate (index_name, canonical_route_id, week_ending) rows. "
+            "duplicate (index_name, canonical_route_id, observation_date, "
+            "is_synthetic) rows. "
             "Run `python migrate_routes.py` to backfill and de-duplicate."
         )
         return False
@@ -236,6 +303,86 @@ def _connect(db_path: Path | None = None) -> Generator[sqlite3.Connection, None,
 # ---------------------------------------------------------------------------
 # Write operations
 # ---------------------------------------------------------------------------
+
+# Substrings that mark a source as fabricated rather than observed.
+SYNTHETIC_SOURCE_MARKERS = ("seed", "synthetic", "fixture", "sample-data")
+
+
+def is_synthetic_source(source: str | None) -> bool:
+    """
+    True when *source* denotes fabricated data rather than a real observation.
+
+    Seed rows exist to bootstrap a demo; they must never reach a statistic.
+    """
+    if not source:
+        return False
+    lowered = str(source).lower()
+    return any(marker in lowered for marker in SYNTHETIC_SOURCE_MARKERS)
+
+
+def count_synthetic_rows(db_path: Path | None = None) -> dict[str, Any]:
+    """
+    Summarise quarantined synthetic rows, for the report header.
+
+    Returns
+    -------
+    dict: {"synthetic": int, "real": int, "total": int, "by_source": {...}}
+    """
+    with _connect(db_path) as conn:
+        synthetic = conn.execute(
+            "SELECT COUNT(*) FROM freight_rates WHERE is_synthetic = 1"
+        ).fetchone()[0]
+        total = conn.execute("SELECT COUNT(*) FROM freight_rates").fetchone()[0]
+        by_source = {
+            row["source"]: row["n"]
+            for row in conn.execute(
+                "SELECT source, COUNT(*) AS n FROM freight_rates "
+                "WHERE is_synthetic = 1 GROUP BY source ORDER BY n DESC"
+            )
+        }
+    return {
+        "synthetic": synthetic,
+        "real": total - synthetic,
+        "total": total,
+        "by_source": by_source,
+    }
+
+
+def get_index_data_status(db_path: Path | None = None) -> dict[str, dict[str, Any]]:
+    """
+    Per-index provenance: how much real data each index has, and how recent.
+
+    Includes indices whose rows are *entirely* synthetic. Those would otherwise
+    vanish from every real-data query — an index with no genuine observations
+    is the most broken state there is, and must not be the quietest.
+
+    Returns
+    -------
+    dict keyed by index_name, each:
+        {"real": int, "synthetic": int, "last_real": str|None}
+    """
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT index_name,
+                   SUM(CASE WHEN is_synthetic = 0 THEN 1 ELSE 0 END) AS real_n,
+                   SUM(CASE WHEN is_synthetic = 1 THEN 1 ELSE 0 END) AS synth_n,
+                   MAX(CASE WHEN is_synthetic = 0 THEN observation_date END) AS last_real
+            FROM freight_rates
+            GROUP BY index_name
+            ORDER BY index_name
+            """
+        ).fetchall()
+
+    return {
+        r["index_name"]: {
+            "real": r["real_n"] or 0,
+            "synthetic": r["synth_n"] or 0,
+            "last_real": r["last_real"],
+        }
+        for r in rows
+    }
+
 
 def _pct_difference(a: float, b: float) -> float:
     """
@@ -328,20 +475,24 @@ def insert_rates(
     Each row's raw route string is resolved to a canonical lane ID, and both
     the canonical ID and the original string are stored. Writes use
     INSERT OR REPLACE keyed on the UNIQUE (index_name, canonical_route_id,
-    week_ending) index, so re-running a scrape updates the existing row for
-    that lane and week rather than appending a near-duplicate.
+    observation_date, is_synthetic) index, so re-running a scrape updates the
+    existing row for that lane and day rather than appending a duplicate.
 
     Because INSERT OR REPLACE resolves collisions by last-write-wins, any
     replacement where the incoming rate differs from the stored rate by more
     than COLLISION_PCT_THRESHOLD is logged as a WARNING and recorded in
-    ``data_quality_log`` — two sources disagreeing about the same lane-week is
+    ``data_quality_log`` — two sources disagreeing about the same lane-day is
     a data-quality signal, not something to silently overwrite.
+
+    Rows whose source is marked as seeded are flagged ``is_synthetic = 1`` and
+    are excluded from every historical statistic.
 
     Parameters
     ----------
     rates : list[dict]
         Each dict must contain keys:
-        index_name, route, rate_usd_per_feu, week_ending, source_url
+        index_name, route, rate_usd_per_feu, source_url, and either
+        observation_date or (legacy) week_ending.
 
     Returns
     -------
@@ -371,6 +522,12 @@ def insert_rates(
                 if is_unmapped(canonical):
                     unmapped_seen.add(str(raw_route))
 
+                # Accept the new key, falling back to the legacy one so
+                # scrapers not yet updated keep working.
+                observation_date = r.get("observation_date") or r["week_ending"]
+                source = r.get("source_url")
+                synthetic = 1 if is_synthetic_source(source) else 0
+
                 # Inspect the row this write is about to replace, so a
                 # material disagreement is recorded rather than lost.
                 existing = conn.execute(
@@ -378,9 +535,9 @@ def insert_rates(
                     SELECT rate_usd, raw_route_string, route, source
                     FROM freight_rates
                     WHERE index_name = ? AND canonical_route_id = ?
-                      AND week_ending = ?
+                      AND observation_date = ? AND is_synthetic = ?
                     """,
-                    (index_name, canonical, r["week_ending"]),
+                    (index_name, canonical, observation_date, synthetic),
                 ).fetchone()
 
                 if existing is not None:
@@ -391,7 +548,7 @@ def insert_rates(
                         collisions.append({
                             "index_name": index_name,
                             "canonical_route_id": canonical,
-                            "week_ending": r["week_ending"],
+                            "week_ending": observation_date,
                             "existing_value": existing_rate,
                             "incoming_value": incoming_rate,
                             "pct_difference": pct,
@@ -403,26 +560,27 @@ def insert_rates(
                             "notes": (
                                 f"INSERT OR REPLACE last-write-wins; "
                                 f"existing source={existing['source']}, "
-                                f"incoming source={r.get('source_url')}"
+                                f"incoming source={source}"
                             ),
                         })
 
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO freight_rates
-                        (index_name, route, rate_usd, week_ending, scraped_at,
-                         source, canonical_route_id, raw_route_string)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        (index_name, route, rate_usd, observation_date, scraped_at,
+                         source, canonical_route_id, raw_route_string, is_synthetic)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         index_name,
                         raw_route,
                         r["rate_usd_per_feu"],
-                        r["week_ending"],
+                        observation_date,
                         scraped_at,
-                        r["source_url"],
+                        source,
                         canonical,
                         raw_route,
+                        synthetic,
                     ),
                 )
                 written += conn.execute("SELECT changes()").fetchone()[0]
@@ -481,6 +639,7 @@ def insert_alert(
 def get_latest_rates(
     index_name: str | None = None,
     db_path: Path | None = None,
+    include_synthetic: bool = False,
 ) -> list[dict[str, Any]]:
     """
     Return the most-recent rate for every (index_name, canonical_route_id) lane.
@@ -488,45 +647,58 @@ def get_latest_rates(
     Grouping is by canonical lane, not by raw route string, so a lane that
     several scrapers spell differently yields one row rather than several.
 
+    Synthetic rows are excluded unless *include_synthetic* is set — a seeded
+    value must never be presented as the latest observation.
+
     Parameters
     ----------
     index_name : str, optional
         Filter to a specific index (e.g. 'WCI'). Normalised before matching.
+    include_synthetic : bool
+        Include quarantined seed rows. For audit tooling only.
     """
     from analysis.route_normaliser import normalise_index  # noqa: PLC0415
+
+    synth_filter = "" if include_synthetic else "AND is_synthetic = 0"
+    outer_filter = "" if include_synthetic else "WHERE fr.is_synthetic = 0"
 
     with _connect(db_path) as conn:
         if index_name:
             rows = conn.execute(
-                """
+                f"""
                 SELECT fr.*
                 FROM freight_rates fr
                 INNER JOIN (
-                    SELECT index_name, canonical_route_id, MAX(week_ending) AS max_week
+                    SELECT index_name, canonical_route_id,
+                           MAX(observation_date) AS max_obs
                     FROM freight_rates
-                    WHERE index_name = ?
+                    WHERE index_name = ? {synth_filter}
                     GROUP BY index_name, canonical_route_id
                 ) latest
-                ON fr.index_name         = latest.index_name
+                ON fr.index_name          = latest.index_name
                 AND fr.canonical_route_id = latest.canonical_route_id
-                AND fr.week_ending        = latest.max_week
+                AND fr.observation_date   = latest.max_obs
+                {outer_filter}
                 ORDER BY fr.canonical_route_id
                 """,
                 (normalise_index(index_name),),
             ).fetchall()
         else:
             rows = conn.execute(
-                """
+                f"""
                 SELECT fr.*
                 FROM freight_rates fr
                 INNER JOIN (
-                    SELECT index_name, canonical_route_id, MAX(week_ending) AS max_week
+                    SELECT index_name, canonical_route_id,
+                           MAX(observation_date) AS max_obs
                     FROM freight_rates
+                    WHERE 1=1 {synth_filter}
                     GROUP BY index_name, canonical_route_id
                 ) latest
-                ON fr.index_name         = latest.index_name
+                ON fr.index_name          = latest.index_name
                 AND fr.canonical_route_id = latest.canonical_route_id
-                AND fr.week_ending        = latest.max_week
+                AND fr.observation_date   = latest.max_obs
+                {outer_filter}
                 ORDER BY fr.index_name, fr.canonical_route_id
                 """,
             ).fetchall()
@@ -539,19 +711,27 @@ def get_rate_history(
     weeks: int = 12,
     index_name: str | None = None,
     db_path: Path | None = None,
+    include_synthetic: bool = False,
 ) -> list[dict[str, Any]]:
     """
-    Return up to *weeks* weeks of history for one canonical lane.
+    Return *weeks* calendar weeks of history for one canonical lane.
+
+    The window is bounded by **time**, not by row count or by a count of
+    distinct dates: every observation on or after
+    ``max(observation_date) - weeks*7 days`` is returned. With FBX publishing
+    daily and other indices weekly, a row-bounded window would silently mean a
+    different span per index.
+
+    Synthetic rows are excluded unless *include_synthetic* is set, so no
+    seeded value can reach a historical statistic.
 
     Parameters
     ----------
     route       : Canonical lane ID (e.g. 'CN_NEUR'). A raw scraper string is
                   also accepted and normalised, so older callers keep working.
-    weeks       : Number of most-recent distinct weeks to return. Every index's
-                  rows for those weeks are returned — a lane now spans several
-                  indices, so limiting by row count would silently drop one
-                  index's history in favour of whichever reports most often.
+    weeks       : Width of the window in calendar weeks.
     index_name  : Optional filter to a single index source.
+    include_synthetic : Include quarantined seed rows. Audit tooling only.
     """
     from analysis.route_normaliser import (  # noqa: PLC0415
         CANONICAL_ROUTES,
@@ -566,40 +746,33 @@ def get_rate_history(
     else:
         canonical = normalise_route(route, index_name)
 
+    synth_filter = "" if include_synthetic else "AND is_synthetic = 0"
+    days = int(weeks) * 7
+
     with _connect(db_path) as conn:
         if index_name:
-            rows = conn.execute(
-                """
-                SELECT * FROM freight_rates
-                WHERE canonical_route_id = ? AND index_name = ?
-                  AND week_ending IN (
-                      SELECT week_ending FROM freight_rates
-                      WHERE canonical_route_id = ? AND index_name = ?
-                      GROUP BY week_ending
-                      ORDER BY week_ending DESC
-                      LIMIT ?
-                  )
-                ORDER BY week_ending DESC
-                """,
-                (canonical, normalise_index(index_name),
-                 canonical, normalise_index(index_name), weeks),
-            ).fetchall()
+            params: tuple[Any, ...] = (
+                canonical, normalise_index(index_name),
+                canonical, normalise_index(index_name),
+            )
+            index_clause = "AND index_name = ?"
         else:
-            rows = conn.execute(
-                """
-                SELECT * FROM freight_rates
-                WHERE canonical_route_id = ?
-                  AND week_ending IN (
-                      SELECT week_ending FROM freight_rates
-                      WHERE canonical_route_id = ?
-                      GROUP BY week_ending
-                      ORDER BY week_ending DESC
-                      LIMIT ?
-                  )
-                ORDER BY week_ending DESC
-                """,
-                (canonical, canonical, weeks),
-            ).fetchall()
+            params = (canonical, canonical)
+            index_clause = ""
+
+        rows = conn.execute(
+            f"""
+            SELECT * FROM freight_rates
+            WHERE canonical_route_id = ? {index_clause} {synth_filter}
+              AND observation_date >= (
+                  SELECT date(MAX(observation_date), '-{days} days')
+                  FROM freight_rates
+                  WHERE canonical_route_id = ? {index_clause} {synth_filter}
+              )
+            ORDER BY observation_date DESC
+            """,
+            params,
+        ).fetchall()
 
     return [dict(r) for r in rows]
 

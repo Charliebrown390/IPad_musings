@@ -97,6 +97,7 @@ from analysis.signals import (                                              # no
     generate_signals,
     generate_weekly_signals,
     check_index_staleness,
+    _wow_pct_change,
 )
 from analysis.route_normaliser import (                                     # noqa: E402
     normalise_route,
@@ -282,35 +283,41 @@ def intraday_check(config: dict) -> None:
     alerts_fired = 0
 
     for route in routes:
-        # Pull only the last 2 data points to compute WoW change
-        history = get_rate_history(route, weeks=2)
+        # Fetch three weeks so a point ~7 days back is inside the window even
+        # when the lane's cadence is irregular.
+        history = get_rate_history(route, weeks=3)
         if len(history) < 2:
             logger.debug("intraday-check: insufficient history for route '%s'", route)
             continue
 
-        # Sort ascending by week_ending and pick the two most-recent unique weeks
-        df = (
-            pd.DataFrame(history)
-            .sort_values("week_ending")
-            .drop_duplicates(subset=["week_ending", "index_name"])
-        )
-        # Average across indices if multiple sources report the same route
-        weekly_avg = df.groupby("week_ending")["rate_usd"].mean().sort_index()
-        if len(weekly_avg) < 2:
+        df = pd.DataFrame(history)
+        date_col = "observation_date" if "observation_date" in df.columns else "week_ending"
+        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+        df = df[df[date_col].notna()]
+        if df.empty:
             continue
 
-        prev_rate = weekly_avg.iloc[-2]
-        curr_rate = weekly_avg.iloc[-1]
-        prev_week = weekly_avg.index[-2]
-        curr_week = weekly_avg.index[-1]
+        # Average across indices where several report the same observation date
+        series = df.groupby(date_col)["rate_usd"].mean().sort_index()
 
-        if prev_rate == 0:
+        # Same ~7-day point comparison the weekly report uses. Grouping by week
+        # and taking the previous row would compare consecutive days on a
+        # daily-publishing index and report a real move as 0.0%.
+        wow_pct = _wow_pct_change(series)
+        if wow_pct is None:
+            logger.debug(
+                "intraday-check: no observation ~7 days prior for '%s'", route
+            )
             continue
 
-        wow_pct = (curr_rate - prev_rate) / prev_rate * 100
+        curr_rate = float(series.iloc[-1])
+        # Reconstruct the comparison point the WoW used, for the alert text.
+        prev_rate = curr_rate / (1 + wow_pct / 100) if wow_pct != -100 else 0.0
+        curr_week = series.index[-1].date()
+        prev_week = (series.index[-1] - pd.Timedelta(days=7)).date()
 
         logger.info(
-            "intraday-check | %-50s | %s→%s | WoW: %+.1f%%",
+            "intraday-check | %-50s | ~%s→%s | WoW: %+.1f%%",
             route, prev_week, curr_week, wow_pct,
         )
 

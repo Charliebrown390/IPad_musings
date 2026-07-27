@@ -44,9 +44,11 @@ from analysis.route_normaliser import (
     validate_route_coverage,
 )
 from database.db import (
+    DDL_DROP_LEGACY_UNIQUE,
     DDL_UNIQUE_LANE,
     DEFAULT_DB_PATH,
-    MIGRATIONS_FREIGHT_RATES,
+    _migrate_schema,
+    is_synthetic_source,
 )
 
 logging.basicConfig(
@@ -65,14 +67,92 @@ def _backup(db_path: Path) -> Path:
     return backup_path
 
 
-def _add_columns(conn: sqlite3.Connection) -> None:
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(freight_rates)")}
-    for column, ddl in MIGRATIONS_FREIGHT_RATES:
-        if column in existing:
-            logger.info("Column freight_rates.%s already present", column)
-        else:
-            conn.execute(ddl)
-            logger.info("Added column freight_rates.%s", column)
+# Column additions and the week_ending -> observation_date rename are owned by
+# database.db._migrate_schema(), so init_db() and this script cannot drift.
+
+
+def _flag_synthetic(conn: sqlite3.Connection) -> int:
+    """
+    Mark every row whose source denotes fabricated data as synthetic.
+
+    Quarantine, not deletion: the rows stay queryable for audit but are
+    filtered out of every historical statistic.
+    """
+    rows = conn.execute("SELECT id, source FROM freight_rates").fetchall()
+    synthetic_ids = [(r[0],) for r in rows if is_synthetic_source(r[1])]
+    if synthetic_ids:
+        conn.executemany(
+            "UPDATE freight_rates SET is_synthetic = 1 WHERE id = ?", synthetic_ids
+        )
+    conn.executemany(
+        "UPDATE freight_rates SET is_synthetic = 0 WHERE id = ?",
+        [(r[0],) for r in rows if not is_synthetic_source(r[1])],
+    )
+    return len(synthetic_ids)
+
+
+def restore_displaced_real_rows(
+    conn: sqlite3.Connection,
+    backup_path: Path,
+) -> list[dict]:
+    """
+    Re-insert real observations that a synthetic row displaced during the
+    original de-duplication.
+
+    Reads *backup_path*, finds every lane-day where the surviving row was
+    synthetic and a discarded row was real, and restores the real row. The
+    synthetic row is kept alongside it — the UNIQUE index includes
+    is_synthetic, so both fit, and reads take the real one.
+    """
+    src = sqlite3.connect(backup_path)
+    src.row_factory = sqlite3.Row
+    try:
+        rows = src.execute(
+            "SELECT id, index_name, route, rate_usd, week_ending, scraped_at, source "
+            "FROM freight_rates"
+        ).fetchall()
+    finally:
+        src.close()
+
+    groups: dict[tuple[str, str, str], list[dict]] = {}
+    for r in rows:
+        key = (
+            normalise_index(r["index_name"]),
+            normalise_route(r["route"], r["index_name"]),
+            r["week_ending"],
+        )
+        groups.setdefault(key, []).append(dict(r))
+
+    restored: list[dict] = []
+    for (index_name, lane, obs_date), members in sorted(groups.items()):
+        if len(members) < 2:
+            continue
+        ranked = sorted(members, key=lambda m: (m["scraped_at"], m["id"]), reverse=True)
+        keeper, losers = ranked[0], ranked[1:]
+        if not is_synthetic_source(keeper["source"]):
+            continue   # a real row survived; nothing was lost
+        for lost in losers:
+            if is_synthetic_source(lost["source"]):
+                continue   # synthetic displaced synthetic; no real data lost
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO freight_rates
+                    (index_name, route, rate_usd, observation_date, scraped_at,
+                     source, canonical_route_id, raw_route_string, is_synthetic)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+                """,
+                (
+                    index_name, lost["route"], lost["rate_usd"], obs_date,
+                    lost["scraped_at"], lost["source"], lane, lost["route"],
+                ),
+            )
+            restored.append({
+                "index_name": index_name, "lane": lane,
+                "observation_date": obs_date, "rate": lost["rate_usd"],
+                "route": lost["route"], "source": lost["source"],
+                "displaced_by": keeper["rate_usd"],
+            })
+    return restored
 
 
 def _backfill(conn: sqlite3.Connection) -> tuple[int, list[tuple[str, str]]]:
@@ -110,7 +190,11 @@ def _backfill(conn: sqlite3.Connection) -> tuple[int, list[tuple[str, str]]]:
     return updated, sorted(unmapped)
 
 
-def report_collisions(db_path: Path, threshold: float = 5.0) -> int:
+def report_collisions(
+    db_path: Path,
+    threshold: float = 5.0,
+    real_vs_seed_only: bool = False,
+) -> int:
     """
     List every lane-week collision without modifying anything.
 
@@ -139,15 +223,33 @@ def report_collisions(db_path: Path, threshold: float = 5.0) -> int:
         groups.setdefault(key, []).append(dict(r))
 
     collisions = {k: v for k, v in groups.items() if len(v) > 1}
+
+    def _displaces_real(members: list[dict]) -> bool:
+        """True when a synthetic row survives and a real one is discarded."""
+        ranked = sorted(members, key=lambda m: (m["scraped_at"], m["id"]), reverse=True)
+        if not is_synthetic_source(ranked[0]["source"]):
+            return False
+        return any(not is_synthetic_source(m["source"]) for m in ranked[1:])
+
+    if real_vs_seed_only:
+        collisions = {k: v for k, v in collisions.items() if _displaces_real(v)}
+
     discarded = sum(len(v) - 1 for v in collisions.values())
 
     logger.info("=" * 78)
     logger.info("COLLISION REPORT (read-only) — %s", db_path.name)
+    if real_vs_seed_only:
+        logger.info("FILTER: only collisions where a SEED row displaced a REAL one")
     logger.info("=" * 78)
-    logger.info("%d rows, %d colliding lane-weeks, %d rows would be discarded",
+    logger.info("%d rows, %d colliding lane-day(s), %d rows would be discarded",
                 len(rows), len(collisions), discarded)
     logger.info("Survivor rule: ORDER BY scraped_at DESC, id DESC (freshest observation)")
     logger.info("")
+
+    if real_vs_seed_only and not collisions:
+        logger.info("No real observation was displaced by a synthetic row.")
+        logger.info("=" * 78)
+        return 0
 
     material = 0
     by_lane: dict[tuple[str, str], list] = {}
@@ -195,10 +297,14 @@ def _pct_gap(a: float, b: float) -> float:
 
 def _dedupe(conn: sqlite3.Connection) -> int:
     """
-    Keep one row per (index_name, canonical_route_id, week_ending).
+    Keep one row per (index_name, canonical_route_id, observation_date,
+    is_synthetic).
 
-    The survivor is the most recently scraped row, falling back to the highest
-    rowid when scraped_at ties — the freshest observation of that lane-week.
+    Real and synthetic rows for the same lane-day are deliberately *not*
+    collapsed into each other: is_synthetic is part of the partition, so a
+    seeded value can never again displace a real observation. Within a
+    partition the survivor is the most recently scraped row, falling back to
+    the highest rowid on a tie.
     """
     doomed = conn.execute(
         """
@@ -207,7 +313,8 @@ def _dedupe(conn: sqlite3.Connection) -> int:
             SELECT id FROM (
                 SELECT id,
                        ROW_NUMBER() OVER (
-                           PARTITION BY index_name, canonical_route_id, week_ending
+                           PARTITION BY index_name, canonical_route_id,
+                                        observation_date, is_synthetic
                            ORDER BY scraped_at DESC, id DESC
                        ) AS rn
                 FROM freight_rates
@@ -226,7 +333,11 @@ def _dedupe(conn: sqlite3.Connection) -> int:
     return len(doomed)
 
 
-def migrate(db_path: Path, dry_run: bool = False) -> int:
+def migrate(
+    db_path: Path,
+    dry_run: bool = False,
+    restore_from: Path | None = None,
+) -> int:
     if not db_path.exists():
         logger.error("Database not found: %s", db_path)
         return 1
@@ -248,18 +359,47 @@ def migrate(db_path: Path, dry_run: bool = False) -> int:
         logger.info("Before: %d rows across %d distinct (index, route) keys",
                     before, distinct_before)
 
-        _add_columns(conn)
+        # Renames week_ending -> observation_date, adds is_synthetic, and
+        # re-adds week_ending as a generated column.
+        _migrate_schema(conn)
+
+        # Drop the legacy UNIQUE index before any write. It keys on
+        # week_ending, which is now generated: a real row and the seed row it
+        # should sit beside both derive the same week, so leaving it in place
+        # would make the restore below silently overwrite the seed row instead
+        # of adding alongside it.
+        conn.execute(DDL_DROP_LEGACY_UNIQUE)
 
         updated, unmapped = _backfill(conn)
         logger.info("Backfilled canonical_route_id for %d rows", updated)
 
+        flagged = _flag_synthetic(conn)
+        logger.info("Flagged %d row(s) as synthetic (quarantined, not deleted)", flagged)
+
+        restored: list[dict] = []
+        if restore_from is not None:
+            if not restore_from.exists():
+                logger.error("Restore source not found: %s", restore_from)
+                conn.rollback()
+                return 1
+            restored = restore_displaced_real_rows(conn, restore_from)
+            logger.info("Restored %d real observation(s) displaced by seed rows",
+                        len(restored))
+            for r in restored:
+                logger.info(
+                    "   RESTORED %s/%s %s: $%s (%s) — had been displaced by $%s",
+                    r["index_name"], r["lane"], r["observation_date"],
+                    f"{r['rate']:,.0f}", r["source"], f"{r['displaced_by']:,.0f}",
+                )
+
         removed = _dedupe(conn)
-        logger.info("Removed %d duplicate lane-week rows", removed)
+        logger.info("Removed %d duplicate lane-day rows", removed)
 
         # Install the constraint only once the table can satisfy it.
         try:
+            conn.execute(DDL_DROP_LEGACY_UNIQUE)
             conn.execute(DDL_UNIQUE_LANE)
-            logger.info("UNIQUE index uq_fr_lane_week installed")
+            logger.info("UNIQUE index uq_fr_lane_obs installed")
         except sqlite3.IntegrityError as exc:
             logger.error("Could not install UNIQUE index: %s", exc)
             conn.rollback()
@@ -309,12 +449,19 @@ def main() -> int:
                              "discarded, then exit. Never modifies the database.")
     parser.add_argument("--threshold", type=float, default=5.0,
                         help="Materiality threshold for collisions, %% (default 5)")
+    parser.add_argument("--real-vs-seed-only", action="store_true",
+                        help="With --report-collisions, show only cases where a "
+                             "synthetic row displaced a real observation")
+    parser.add_argument("--restore-from", type=Path, default=None,
+                        help="Pre-migration backup to recover real observations "
+                             "that were displaced by synthetic rows")
     args = parser.parse_args()
 
     if args.report_collisions:
-        return report_collisions(args.db, threshold=args.threshold)
+        return report_collisions(args.db, threshold=args.threshold,
+                                 real_vs_seed_only=args.real_vs_seed_only)
 
-    code = migrate(args.db, dry_run=args.dry_run)
+    code = migrate(args.db, dry_run=args.dry_run, restore_from=args.restore_from)
 
     if code == 0:
         logger.info("Verifying route coverage ...")

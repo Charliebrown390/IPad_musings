@@ -27,9 +27,14 @@ import httpx
 import pandas as pd
 import yaml
 
-from database.db import get_latest_rates, get_rate_history, insert_alert, get_latest_news_signal
+from database.db import (
+    get_latest_rates, get_rate_history, insert_alert, get_latest_news_signal,
+    count_synthetic_rows,
+)
 from analysis.route_normaliser import display_name
-from analysis.signals import STALE_THRESHOLD_DAYS, data_age_days, is_stale
+from analysis.signals import (
+    STALE_THRESHOLD_DAYS, data_age_days, is_stale, check_index_staleness,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +76,9 @@ def _signal_label(sig: dict[str, Any]) -> str:
     Produce a single display label from a route's signal dict.
     Priority: STRESS > SPIKE/COOLING > DIVERGENCE > STABLE
     """
+    if sig.get("insufficient_history"):
+        n = sig.get("real_observations", 0)
+        return f"⚪ INSUFFICIENT HISTORY ({n} obs)"
     if sig.get("stress") == "STRESS":
         return "🔴 STRESS"
     momentum = sig.get("momentum", "STABLE")
@@ -108,7 +116,10 @@ def _build_summary_table(
     rate_lookup: dict[tuple[str, str], tuple[float, Any]] = {}
     for row in latest_rates:
         key = (row.get("canonical_route_id") or row["route"], row["index_name"])
-        rate_lookup[key] = (row["rate_usd"], row.get("week_ending"))
+        rate_lookup[key] = (
+            row["rate_usd"],
+            row.get("observation_date") or row.get("week_ending"),
+        )
 
     routes = sorted({r.get("canonical_route_id") or r["route"] for r in latest_rates})
 
@@ -149,6 +160,41 @@ def _build_summary_table(
     return "\n".join(rows)
 
 
+def _build_synthetic_header() -> list[str]:
+    """
+    State how many synthetic rows the database holds and confirm they take no
+    part in any calculation.
+
+    Rendered whether or not any exist, so the reader never has to wonder
+    whether the check ran.
+    """
+    try:
+        counts = count_synthetic_rows()
+    except Exception as exc:                       # never break the report
+        logger.warning("could not count synthetic rows: %s", exc)
+        return []
+
+    if not counts["synthetic"]:
+        return [
+            f"> ✅ **Data provenance** — all {counts['total']:,} rows are real "
+            f"observations; no synthetic data present.",
+            "",
+        ]
+
+    sources = ", ".join(
+        f"`{src}` ({n:,})" for src, n in counts["by_source"].items()
+    )
+    return [
+        f"> ℹ️ **Data provenance** — {counts['synthetic']:,} of {counts['total']:,} "
+        f"rows are synthetic (seed) data and are **excluded from every "
+        f"calculation** in this report; {counts['real']:,} real observations "
+        f"were used.",
+        ">",
+        f"> Quarantined, not deleted, for audit. Sources: {sources}.",
+        "",
+    ]
+
+
 def _build_staleness_header(latest_rates: list[dict]) -> list[str]:
     """
     Warn about any index whose freshest data is older than the threshold.
@@ -156,35 +202,36 @@ def _build_staleness_header(latest_rates: list[dict]) -> list[str]:
     Rendered on every report so a scraper that has quietly started failing is
     visible immediately, rather than being discovered months later.
     """
-    freshest: dict[str, str] = {}
-    for row in latest_rates:
-        idx = row.get("index_name")
-        week = row.get("week_ending")
-        if not idx or not week:
-            continue
-        if idx not in freshest or str(week) > freshest[idx]:
-            freshest[idx] = str(week)
+    try:
+        stale = check_index_staleness()
+    except Exception as exc:                       # never break the report
+        logger.warning("could not check index staleness: %s", exc)
+        return []
 
-    stale = {
-        idx: week for idx, week in freshest.items() if is_stale(week)
-    }
     if not stale:
         return []
 
-    noun = "index has" if len(stale) == 1 else "indices have"
+    noun = "index" if len(stale) == 1 else "indices"
     # Every line is prefixed with '>' including the separator, otherwise a
     # bare blank line would terminate the blockquote.
     lines = [
-        f"> ⚠ **STALE DATA WARNING** — {len(stale)} {noun} not reported "
-        f"in over {STALE_THRESHOLD_DAYS} days:",
+        f"> ⚠ **STALE DATA WARNING** — {len(stale)} {noun} not reporting "
+        f"usable data (threshold {STALE_THRESHOLD_DAYS} days):",
         ">",
     ]
-    for idx, week in sorted(stale.items()):
-        age = data_age_days(week)
-        lines.append(
-            f"> - **{idx}** — last data {week} ({age} days old). "
-            f"Excluded from divergence checks and the inflation composite."
-        )
+    for idx, info in sorted(stale.items()):
+        if info.get("no_real_data"):
+            lines.append(
+                f"> - **{idx}** — 🛑 **no real data at all**; every one of its "
+                f"{info['synthetic']:,} rows is synthetic. This index has never "
+                f"scraped successfully. Contributes nothing to any calculation."
+            )
+        else:
+            lines.append(
+                f"> - **{idx}** — last real data {info['last_week']} "
+                f"({info['age_days']} days old). Excluded from divergence "
+                f"checks and the inflation composite."
+            )
     lines += [">", ""]
     return lines
 
@@ -261,6 +308,7 @@ def _build_markdown_report(
 
     # Surface dead scrapers before anything else — every number below is only
     # as trustworthy as the freshness of the index behind it.
+    lines += _build_synthetic_header()
     lines += _build_staleness_header(latest_rates)
 
     if ai_summary:

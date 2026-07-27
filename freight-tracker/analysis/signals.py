@@ -35,6 +35,7 @@ from database.db import (
     get_input_cost_history,
     insert_signal,
     log_data_quality_issue,
+    get_index_data_status,
 )
 from analysis.route_normaliser import normalise_route
 
@@ -54,6 +55,20 @@ STRESS_THRESHOLD_PCT = 40.0        # route above 12W avg → STRESS
 # scraper's last value silently masquerades as current — comparing a
 # four-month-old WCI print against a live FBX print manufactures divergence.
 STALE_THRESHOLD_DAYS = 14
+
+# Indices publish on different cadences — FBX daily, SCFI/WCI weekly — so every
+# window below is bounded by elapsed time, never by row count. A "4-week
+# average" taken over 4 rows of daily FBX data would be a 4-day average.
+WOW_LOOKBACK_DAYS = 7          # week-on-week compares against ~7 days prior
+WOW_TOLERANCE_DAYS = 2         # accept the closest observation within ±2 days
+FOUR_WEEK_DAYS = 28
+TWELVE_WEEK_DAYS = 84
+
+# A statistic computed on a handful of points is noise wearing a number's
+# clothes. Below this many real (non-synthetic) observations, report
+# INSUFFICIENT_HISTORY instead of a figure.
+MIN_REAL_OBSERVATIONS = 12
+INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"
 # Key EU lanes watched for stress. Canonical IDs, so no spelling variants
 # need listing — the normaliser resolves every scraper's wording to these.
 STRESS_ROUTES = {
@@ -83,42 +98,98 @@ _NORM_WEEKS = 52
 # Per-route signal helpers  (unchanged)
 # ---------------------------------------------------------------------------
 
+def _value_days_before(
+    series: pd.Series,
+    days: int,
+    tolerance: int,
+) -> float | None:
+    """
+    Value of the observation closest to *days* before the latest one.
+
+    Looks for a point within ±*tolerance* days of the target date and returns
+    the nearest match, or None if the series has no observation in that band.
+    Point-to-point rather than row-to-row: on a daily series the previous row
+    is yesterday, not last week.
+    """
+    s = series.dropna().sort_index()
+    # Collapse repeated timestamps to one value per date, otherwise a lookup
+    # on a duplicated index returns a Series rather than a scalar.
+    if not s.index.is_unique:
+        s = s.groupby(level=0).mean().sort_index()
+    if len(s) < 2:
+        return None
+
+    latest_date = s.index[-1]
+    target = latest_date - pd.Timedelta(days=days)
+    lo = target - pd.Timedelta(days=tolerance)
+    hi = target + pd.Timedelta(days=tolerance)
+
+    window = s[(s.index >= lo) & (s.index <= hi)]
+    window = window[window.index < latest_date]
+    if window.empty:
+        return None
+
+    # Nearest to the target date, not merely inside the band.
+    nearest_idx = min(window.index, key=lambda d: abs((d - target).days))
+    return float(window.loc[nearest_idx])
+
+
+def _window_mean(series: pd.Series, days: int, exclude_latest: bool = False) -> float | None:
+    """
+    Mean of the observations falling in the last *days* calendar days.
+
+    Time-bounded, so the result means the same thing whether the underlying
+    index publishes daily or weekly.
+    """
+    s = series.dropna().sort_index()
+    if s.empty:
+        return None
+    latest_date = s.index[-1]
+    cutoff = latest_date - pd.Timedelta(days=days)
+    window = s[s.index > cutoff]
+    if exclude_latest:
+        window = window[window.index < latest_date]
+    if window.empty:
+        return None
+    return float(window.mean())
+
+
 def _wow_pct_change(series: pd.Series) -> float | None:
     """
-    Return the week-on-week % change for the most-recent data point.
+    Week-on-week % change: latest value against the observation closest to
+    seven days earlier (±2 days).
 
-    Parameters
-    ----------
-    series : pd.Series
-        Values = rate_usd, sorted ascending by date index.
+    Returns None when the series has no observation in that band — a daily
+    index would otherwise report a one-day move as a weekly one.
     """
     s = series.dropna().sort_index()
     if len(s) < 2:
         return None
-    prev, curr = s.iloc[-2], s.iloc[-1]
-    if prev == 0:
+
+    prev = _value_days_before(s, WOW_LOOKBACK_DAYS, WOW_TOLERANCE_DAYS)
+    if prev is None or prev == 0:
         return None
+
+    curr = float(s.iloc[-1])
     return round((curr - prev) / prev * 100, 2)
 
 
 def _momentum_label(series: pd.Series) -> tuple[str, float | None]:
     """
-    Compare the latest rate against the 4-week rolling average.
+    Compare the latest rate against the trailing four-week average.
 
-    Returns
-    -------
-    (label, pct_vs_4w_avg)  where label is "SPIKE" | "COOLING" | "STABLE"
+    The average is bounded by 28 calendar days and excludes the latest point,
+    so the comparison is against recent history rather than against itself.
     """
     s = series.dropna().sort_index()
     if len(s) < 2:
         return "STABLE", None
 
-    window = min(4, len(s) - 1)
-    rolling_avg = s.iloc[-window - 1 : -1].mean()
-    if rolling_avg == 0:
+    rolling_avg = _window_mean(s, FOUR_WEEK_DAYS, exclude_latest=True)
+    if not rolling_avg:
         return "STABLE", None
 
-    current = s.iloc[-1]
+    current = float(s.iloc[-1])
     pct = (current - rolling_avg) / rolling_avg * 100
 
     if pct >= SPIKE_MOMENTUM_PCT:
@@ -151,11 +222,13 @@ def _stress_flag(route: str, series: pd.Series) -> tuple[str | None, float | Non
     if len(s) < 2:
         return None, None
 
-    avg_12w = s.mean()
-    if avg_12w == 0:
+    # Bounded to 84 calendar days rather than "whatever was fetched", so the
+    # baseline is a true 12-week average regardless of publication cadence.
+    avg_12w = _window_mean(s, TWELVE_WEEK_DAYS)
+    if not avg_12w:
         return None, None
 
-    current = s.iloc[-1]
+    current = float(s.iloc[-1])
     pct_above = (current - avg_12w) / avg_12w * 100
 
     if pct_above >= STRESS_THRESHOLD_PCT:
@@ -198,34 +271,53 @@ def check_index_staleness(
     -------
     dict keyed by index name: {"last_week": str, "age_days": int}
     """
-    if latest_rates is None:
-        latest_rates = get_latest_rates()
-
-    freshest: dict[str, str] = {}
-    for row in latest_rates:
-        idx, week = row.get("index_name"), row.get("week_ending")
-        if not idx or not week:
-            continue
-        if idx not in freshest or str(week) > freshest[idx]:
-            freshest[idx] = str(week)
+    status = get_index_data_status()
 
     stale: dict[str, dict[str, Any]] = {}
-    for idx, week in sorted(freshest.items()):
-        age = data_age_days(week)
-        if age is None or age <= STALE_THRESHOLD_DAYS:
-            continue
-        stale[idx] = {"last_week": week, "age_days": age}
-        logger.warning(
-            "STALE INDEX %s: no data since %s (%d days). Excluded from "
-            "divergence checks and the inflation composite.", idx, week, age,
-        )
+    for idx, info in sorted(status.items()):
+        last_real = info["last_real"]
+
+        # An index with no real observations at all is the worst case, and
+        # would be invisible to any query that (correctly) excludes synthetic
+        # rows. Surface it explicitly.
+        if not info["real"]:
+            stale[idx] = {
+                "last_week": None,
+                "age_days": None,
+                "no_real_data": True,
+                "synthetic": info["synthetic"],
+            }
+            logger.warning(
+                "INDEX %s HAS NO REAL DATA: all %d row(s) are synthetic. "
+                "This index has never successfully scraped.",
+                idx, info["synthetic"],
+            )
+            note = (f"{idx} has zero real observations; all {info['synthetic']} "
+                    f"row(s) are synthetic")
+        else:
+            age = data_age_days(last_real)
+            if age is None or age <= STALE_THRESHOLD_DAYS:
+                continue
+            stale[idx] = {
+                "last_week": last_real,
+                "age_days": age,
+                "no_real_data": False,
+                "synthetic": info["synthetic"],
+            }
+            logger.warning(
+                "STALE INDEX %s: no real data since %s (%d days). Excluded "
+                "from divergence checks and the inflation composite.",
+                idx, last_real, age,
+            )
+            note = (f"{idx} last reported {last_real} ({age} days ago); "
+                    f"threshold is {STALE_THRESHOLD_DAYS} days")
+
         try:
             log_data_quality_issue(
                 issue_type="stale_index",
                 index_name=idx,
-                week_ending=week,
-                notes=(f"{idx} last reported {week} ({age} days ago); "
-                       f"threshold is {STALE_THRESHOLD_DAYS} days"),
+                week_ending=last_real,
+                notes=note,
             )
         except Exception as exc:   # logging must never break the pipeline
             logger.debug("check_index_staleness: could not persist issue: %s", exc)
@@ -261,8 +353,8 @@ def _divergence_flag(
     def _latest(rows: pd.DataFrame) -> tuple[float | None, Any]:
         if rows.empty:
             return None, None
-        row = rows.sort_values("week_ending").iloc[-1]
-        return row["rate_usd"], row["week_ending"]
+        row = rows.sort_values("observation_date").iloc[-1]
+        return row["rate_usd"], row["observation_date"]
 
     fbx_rate, fbx_week = _latest(fbx_rows)
     wci_rate, wci_week = _latest(wci_rows)
@@ -354,13 +446,19 @@ def _fetch_freight_composite_weekly(weeks: int = _NORM_WEEKS) -> pd.Series:
         return pd.Series(dtype=float)
 
     df = pd.DataFrame(all_rows)
-    df["week_ending"] = pd.to_datetime(df["week_ending"])
+    date_col = "observation_date" if "observation_date" in df.columns else "week_ending"
+    df["observation_date"] = pd.to_datetime(df[date_col], errors="coerce")
+    df = df[df["observation_date"].notna()]
+    if "is_synthetic" in df.columns:
+        df = df[pd.to_numeric(df["is_synthetic"], errors="coerce").fillna(0) == 0]
+    if df.empty:
+        return pd.Series(dtype=float)
 
     # Drop indices whose freshest print is stale. A dead scraper's last value
     # would otherwise be carried into the composite as if it were current,
     # anchoring the 4-week change against a months-old observation.
     if "index_name" in df.columns:
-        freshest = df.groupby("index_name")["week_ending"].max()
+        freshest = df.groupby("index_name")["observation_date"].max()
         stale_indices = [idx for idx, wk in freshest.items() if is_stale(wk)]
         if stale_indices:
             kept = df[~df["index_name"].isin(stale_indices)]
@@ -379,29 +477,54 @@ def _fetch_freight_composite_weekly(weeks: int = _NORM_WEEKS) -> pd.Series:
                 df = kept
 
     # Weekly mean across all routes and indices
-    weekly = df.groupby("week_ending")["rate_usd"].mean().sort_index()
+    weekly = df.groupby("observation_date")["rate_usd"].mean().sort_index()
     weekly.index = weekly.index.to_period("W").to_timestamp("W")  # align to week-end
     return weekly.dropna()
 
 
-def _4w_pct_change(series: pd.Series) -> float | None:
+def _to_weekly(series: pd.Series) -> pd.Series:
     """
-    Compute the 4-period (4-week) % change using the most-recent values.
-    Requires at least 5 data points.
+    Resample an irregular series onto a regular weekly grid (mean per week).
+
+    Rates are stored at their true observation dates — daily for FBX, weekly
+    for others. Resampling at read time is what makes a row-offset operation
+    such as ``pct_change(periods=4)`` mean four *weeks* for every index.
     """
     s = series.dropna().sort_index()
-    if len(s) < 5:
+    if s.empty:
+        return s
+    if not isinstance(s.index, pd.DatetimeIndex):
+        s.index = pd.to_datetime(s.index, errors="coerce")
+        s = s[s.index.notna()]
+    return s.resample("W").mean().dropna()
+
+
+def _4w_pct_change(series: pd.Series) -> float | None:
+    """
+    Four-week % change: latest value against the observation closest to 28
+    days earlier (±3 days), rather than four rows back.
+    """
+    s = series.dropna().sort_index()
+    if len(s) < 2:
         return None
-    base = s.iloc[-5]
-    curr = s.iloc[-1]
-    if base == 0:
+    base = _value_days_before(s, FOUR_WEEK_DAYS, tolerance=3)
+    if base is None or base == 0:
         return None
+    curr = float(s.iloc[-1])
     return round((curr - base) / base * 100, 4)
 
 
 def _rolling_4w_pct_changes(series: pd.Series) -> pd.Series:
-    """Full rolling series of 4-period % changes (used as the normalization window)."""
-    return series.pct_change(periods=4).mul(100).dropna()
+    """
+    Rolling four-week % changes, used as the min-max normalisation window.
+
+    Computed on a weekly-resampled grid so ``periods=4`` is four weeks for
+    every index, not four rows of whatever cadence it happens to publish at.
+    """
+    weekly = _to_weekly(series)
+    if len(weekly) < 5:
+        return pd.Series(dtype=float)
+    return weekly.pct_change(periods=4).mul(100).dropna()
 
 
 def _minmax_normalize(value: float, history: pd.Series) -> float:
@@ -566,13 +689,33 @@ def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
         logger.warning("generate_signals: received empty DataFrame")
         return {}
 
-    required_cols = {"index_name", "route", "rate_usd", "week_ending"}
+    required_cols = {"index_name", "route", "rate_usd"}
     missing = required_cols - set(df.columns)
     if missing:
         raise ValueError(f"generate_signals: DataFrame missing columns: {missing}")
 
     df = df.copy()
-    df["week_ending"] = pd.to_datetime(df["week_ending"])
+
+    # Prefer the true observation date; fall back to week_ending for callers
+    # still passing pre-rename frames.
+    date_col = "observation_date" if "observation_date" in df.columns else "week_ending"
+    df["observation_date"] = pd.to_datetime(df[date_col], errors="coerce")
+    df = df[df["observation_date"].notna()]
+
+    # Quarantined seed rows must never reach a statistic. get_rate_history()
+    # already filters them, but generate_signals() is public and may be handed
+    # a frame from anywhere.
+    if "is_synthetic" in df.columns:
+        synthetic_count = int(pd.to_numeric(df["is_synthetic"], errors="coerce").fillna(0).sum())
+        if synthetic_count:
+            logger.warning(
+                "generate_signals: dropping %d synthetic row(s) before computing statistics",
+                synthetic_count,
+            )
+            df = df[pd.to_numeric(df["is_synthetic"], errors="coerce").fillna(0) == 0]
+    if df.empty:
+        logger.warning("generate_signals: no real observations after excluding synthetic rows")
+        return {}
 
     # Group by physical lane, not by scraper spelling. Rows written before the
     # canonicalisation migration may lack the column, so derive it on the fly.
@@ -589,7 +732,7 @@ def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
             )
         )
 
-    df = df.sort_values(["canonical_route_id", "index_name", "week_ending"])
+    df = df.sort_values(["canonical_route_id", "index_name", "observation_date"])
 
     routes = df["canonical_route_id"].unique().tolist()
     results: dict[str, dict[str, Any]] = {}
@@ -597,31 +740,62 @@ def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
     for route in routes:
         route_df = df[df["canonical_route_id"] == route]
 
-        # Aggregate across all indices for this route (mean if multiple)
+        # Aggregate across all indices for this lane, keyed on the true
+        # observation date (mean where several indices report the same day).
         agg_series = (
-            route_df.groupby("week_ending")["rate_usd"]
+            route_df.groupby("observation_date")["rate_usd"]
             .mean()
             .sort_index()
         )
 
-        # 1. Week-on-week % change
-        wow = _wow_pct_change(agg_series)
-
-        # 2. Momentum label (4-week rolling avg vs current)
-        momentum, momentum_vs_4w = _momentum_label(agg_series)
-
-        # 4-week average (for report table)
-        window = min(4, len(agg_series))
-        four_week_avg = round(agg_series.iloc[-window:].mean(), 2) if window > 0 else None
-
         # 3. Cross-index divergence (FBX vs WCI); stale inputs are excluded
         div_label, fbx_rate, wci_rate, index_ages = _divergence_flag(route, df)
 
+        # 5. Freshness of this lane's most recent observation
+        lane_age = data_age_days(route_df["observation_date"].max())
+
+        # A statistic over a thin series is noise. Report the shortfall rather
+        # than a number that looks authoritative.
+        n_real = len(agg_series)
+        if n_real < MIN_REAL_OBSERVATIONS:
+            logger.warning(
+                "generate_signals: %s has only %d real observation(s) "
+                "(minimum %d) — reporting %s",
+                route, n_real, MIN_REAL_OBSERVATIONS, INSUFFICIENT_HISTORY,
+            )
+            results[route] = {
+                "wow_pct":          None,
+                "momentum":         INSUFFICIENT_HISTORY,
+                "momentum_vs_4w":   None,
+                "divergence":       None,
+                "fbx_rate":         fbx_rate,
+                "wci_rate":         wci_rate,
+                "stress":           None,
+                "stress_pct_above": None,
+                "inflation_score":  0.0,
+                "four_week_avg":    None,
+                "data_age_days":    lane_age,
+                "is_stale":         lane_age is not None and lane_age > STALE_THRESHOLD_DAYS,
+                "fbx_age_days":     index_ages["fbx"],
+                "wci_age_days":     index_ages["wci"],
+                "real_observations": n_real,
+                "insufficient_history": True,
+                "inflationary_pressure_breakdown": {},
+            }
+            continue
+
+        # 1. Week-on-week % change — against ~7 days prior, not the prior row
+        wow = _wow_pct_change(agg_series)
+
+        # 2. Momentum label (trailing 28-day average vs current)
+        momentum, momentum_vs_4w = _momentum_label(agg_series)
+
+        # 4-week average for the report table — bounded by 28 calendar days
+        fw = _window_mean(agg_series, FOUR_WEEK_DAYS)
+        four_week_avg = round(fw, 2) if fw is not None else None
+
         # 4. Geopolitical stress proxy
         stress_label, stress_pct = _stress_flag(route, agg_series)
-
-        # 5. Freshness of this lane's most recent observation
-        lane_age = data_age_days(route_df["week_ending"].max())
 
         results[route] = {
             "wow_pct":          wow,
@@ -638,6 +812,8 @@ def generate_signals(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
             "is_stale":         lane_age is not None and lane_age > STALE_THRESHOLD_DAYS,
             "fbx_age_days":     index_ages["fbx"],
             "wci_age_days":     index_ages["wci"],
+            "real_observations": n_real,
+            "insufficient_history": False,
             "inflationary_pressure_breakdown": {},  # back-filled below
         }
 
@@ -692,9 +868,12 @@ def generate_weekly_signals(
 
     flat: list[dict[str, Any]] = []
     for route, sig in signals_by_route.items():
-        # Determine the most-recent week_ending for this lane
+        # Most-recent observation date for this lane
         route_rows = [r for r in all_rows if r.get("canonical_route_id") == route]
-        week_ending = max(r["week_ending"] for r in route_rows) if route_rows else ""
+        week_ending = max(
+            (r.get("observation_date") or r.get("week_ending") or "")
+            for r in route_rows
+        ) if route_rows else ""
 
         breakdown = sig.get("inflationary_pressure_breakdown", {})
 
