@@ -10,6 +10,13 @@ name: FBX Structure Dump (one-off evidence)
 
 on:
   workflow_dispatch:
+  # Also self-trigger when the capture itself changes, so a fix to the
+  # workflow or the script proves itself on the next push rather than waiting
+  # on a manual click. The paths filter keeps every other commit out.
+  push:
+    paths:
+      - .github/workflows/fbx_dump.yml
+      - freight-tracker/scripts/dump_fbx_structure.py
 
 permissions:
   contents: write   # needed to commit the artifacts back
@@ -22,6 +29,12 @@ jobs:
     name: Render FBX page → dump structure
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Loop guard: the commit-back below tags its message, and a push carrying
+    # that tag skips this job. A manual dispatch has no head_commit, so it is
+    # allowed through unconditionally.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          !contains(github.event.head_commit.message, '[skip dump]') }}
 
     steps:
       - name: Checkout repository
@@ -89,7 +102,8 @@ jobs:
             echo "Nothing to commit — no artifacts produced or no change."
           else
             RUN_DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
-            git commit -m "chore: FBX page structure dump [${RUN_DATE}] [skip ci]"
+            # The tag is what the job-level guard above looks for.
+            git commit -m "chore: FBX page structure dump [${RUN_DATE}] [skip dump]"
             # Push back to the branch this run was dispatched on. The
             # repository's default branch is claude/freight-tracker-setup-viLxr;
             # there is no 'main', so hardcoding one would fail the push.
