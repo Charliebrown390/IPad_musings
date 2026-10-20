@@ -118,9 +118,9 @@ footer {
 </nav>
 <main>
 <div class="alert-banner">🚨 Urgent signals detected — review route table below</div>
-<h1>🚨 Freight Rate Weekly Report — 2026-10-19</h1>
+<h1>🚨 Freight Rate Weekly Report — 2026-10-20</h1>
 <blockquote>
-<p>ℹ️ <strong>Data provenance</strong> — 168 of 1,992 rows are synthetic (seed) data and are <strong>excluded from every calculation</strong> in this report; 1,824 real observations were used.</p>
+<p>ℹ️ <strong>Data provenance</strong> — 168 of 2,004 rows are synthetic (seed) data and are <strong>excluded from every calculation</strong> in this report; 1,836 real observations were used.</p>
 <p>Quarantined, not deleted, for audit. Sources: <code>seed-data</code> (156), <code>seed-data/march-2026</code> (12).</p>
 <p>⚠ <strong>STALE DATA WARNING</strong> — 2 indices not reporting usable data (threshold 14 days):</p>
 <ul>
@@ -134,30 +134,23 @@ footer {
 <h2>Week-on-Week Analysis &amp; Portfolio Implications</h2>
 <hr />
 <h2>(1) DEMAND TRENDS BY REGION</h2>
-<p><strong>Asia–Med (CN_MED): Softening</strong>
-The -0.5% WoW decline signals weakening demand on Europe's primary entry route. This is the first negative signal among major Asia–Europe lanes and warrants monitoring as an early indicator of demand destruction in Western consumer markets, potentially correlating with inventory normalization post-holiday season.</p>
-<p><strong>Asia–Northern Europe (CN_NEUR): Modest Stabilization</strong>
-A +1.1% weekly gain suggests modest resilience on shorter-haul European services, though the magnitude indicates this is not a demand acceleration—merely stabilization at elevated levels.</p>
-<p><strong>Long-Haul Americas (CN_SAM &amp; CN_USEC Divergence): Polarization</strong>
-The +5.6% surge on South America routes contrasts sharply with -1.1% on US East Coast. This split reflects:
-- <strong>Strong commodity demand</strong> (ore, agricultural products) driving SAM rates higher
-- <strong>US import fatigue</strong> and port congestion shifting volume patterns, depressing traditional USEC transatlantic flows
-- Confirmed by news sentiment: <em>West Africa ore boom with increased VLOC deployment</em> directly supports SAM strength</p>
-<p><strong>Asia–US West Coast (CN_USWC): Flat</strong>
-The -0.3% reading suggests trans-Pacific volumes are neither accelerating nor contracting materially. This stability in the world's largest container trade lane is notable given macro uncertainty.</p>
-<p><strong>Composite Freight Index Signals (FBX data):</strong>
-- <strong>FBX21 SPIKE (+7.5%)</strong>: This is the only momentum alert in the dataset and carries outsized analytical weight. FBX21 typically tracks Asian shelf-to-Red Sea services, consistent with:
-  - <strong>Geopolitical risk premium</strong> (missile incident from Riyadh, +65 sentiment score)
-  - Possible Suez-bypass diversion extending voyage costs</p>
-<ul>
-<li><strong>Broadening gains</strong> across FBX12 (+4.5%), FBX22 (+1.2%), FBX24 (+0.4%) suggest selective pockets of strength rather than across-the-board resilience</li>
-</ul>
-<p><strong>Regional Demand Summary:</strong>
-Demand is <strong>segmented by commodity and geography</strong>: long-haul bulk-linked routes (SAM, FBX21) are firm; traditional containerized Asia–Europe is softening; intra-Pacific is stable. This is <strong>not a synchronized global recovery</strong>—it reflects structural shifts in sourcing patterns and risk-adjusted routing.</p>
+<p><strong>Divergent regional performance signals emerging:</strong></p>
+<p><strong>Asia-Europe Lanes (Weakening)</strong>
+- <strong>CN_MED</strong> and <strong>CN_USEC</strong> both posting negative WoW (-0.5% and -1.1% respectively), with stable momentum indicating sustained softness rather than transient volatility
+- These represent mature, high-volume corridors; weakness here suggests demand normalization post-holiday periods or demand destruction in Mediterranean/Atlantic clusters</p>
+<p><strong>Emerging &amp; Longer-Haul Routes (Strengthening)</strong>
+- <strong>CN_SAM</strong> displaying strongest performance (+5.6% WoW) with stable momentum—indicative of sustained South American import demand, likely driven by agricultural/commodity cycles or vessel cascading effects
+- <strong>CN_OCE</strong> (+3.2%) and <strong>CN_NEUR</strong> (+1.1%) both positive, suggesting diversified demand across less-saturated lanes
+- <strong>CN_USWC</strong> marginally negative (-0.3%), indicating US West Coast demand remains price-sensitive but not collapsing</p>
+<p><strong>Composite Index Signals (FBX Unmapped Routes)</strong>
+- <strong>FBX21 spike (+7.5% with SPIKE momentum)</strong> is the most material signal: this is an outlier requiring immediate mapping to underlying route exposure (likely long-haul tradelane or regional peak)
+- <strong>FBX12</strong> (+4.5%) and <strong>FBX22</strong> (+1.2%) sustaining mid-single-digit gains on stable momentum—consistent with orderly demand recovery
+- <strong>FBX14</strong> flat-lined (0.0%), <strong>FBX24</strong> minimal (+0.4%), <strong>FBX26</strong> negative (-0.8%)—indicating bifurcation: premium capacity routes seeing upticks, standard capacity facing residual pressure</p>
+<p><strong>Regional Demand Assessment:</strong> 
+Asia-Europe weakness offset by emerging market strength and long-haul/niche lane resilience. <em>This is a rebalancing phase, not demand collapse.</em></p>
 <hr />
-<h2>(2) INFLATIONARY COST PRESSURES: MATERIALIZED vs. PASS-THROUGH LAG</h2>
-<p><strong>Composite Inflation Score: 48/100 (Moderate, but uneven distribution)</strong></p>
-<h3>Already Materialised in Operating Costs (Limited Near-Term Buffer)</h3>
+<h2>(2) INFLATIONARY COST PRESSURES: MATERIALISED VS. NOT-YET-PASSED-THROUGH</h2>
+<p><strong>Critical Decomposition of 50/100 Composite Score:</strong></p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -168,113 +161,133 @@ Demand is <strong>segmented by commodity and geography</strong>: long-haul bulk-
 </thead>
 <tbody>
 <tr>
-<td><strong>Bunker fuel</strong></td>
-<td>0.4/100</td>
-<td><strong>CRITICALLY LOW PRESSURE</strong> – No inflationary tailwind from energy. 4W change +0.4% is negligible. Shipping operators have already absorbed prior fuel volatility; further downside would improve margins but is not priced into current rates.</td>
+<td><strong>Rate Component</strong></td>
+<td>100/100</td>
+<td><strong>FULLY MATERIALISED</strong> – freight rates already at or near peak levels; limited room for further rate-driven inflation pass-through</td>
 </tr>
 <tr>
-<td><strong>BDI (Dry bulk index)</strong></td>
-<td>N/A</td>
-<td>Absent from dataset but contextually important: West Africa ore boom signals strong bulk demand, yet BDI absence suggests either data gap or stabilization below stress levels.</td>
+<td><strong>Crude/Energy Component</strong></td>
+<td>71.3/100</td>
+<td><strong>PARTIALLY MATERIALISED</strong> – bunker fuel (proxy: 1.2% 4W change) shows minimal recent movement, but crude futures (71.3 score) signal latent energy cost risk. 4-8 week lag typical before bunker inflation translates to fuel surcharges</td>
+</tr>
+<tr>
+<td><strong>Bunker Fuel (Direct)</strong></td>
+<td>1.2/100</td>
+<td><strong>MUTED CURRENT SIGNAL</strong> – actual bunker cost inflation running at +1.2% over 4 weeks is subdued and already reflected in carrier cost base; <em>however</em>, this decouples from crude score, suggesting energy markets pricing in future volatility not yet realized at pump</td>
+</tr>
+<tr>
+<td><strong>BDI Component</strong></td>
+<td>N/A/100</td>
+<td><strong>NO DATA</strong> – bulk dry index unavailable; this represents blind spot for dry bulk-linked cost inflation (affecting feedstock, raw materials for production). Absence suggests general cargo dominance in this dataset.</td>
 </tr>
 </tbody>
 </table></div>
-<h3>Pressure NOT Yet Passed Through to Freight Rates (Critical Gap)</h3>
-<div class="table-wrap"><table>
-<thead>
-<tr>
-<th>Cost Component</th>
-<th>Score</th>
-<th>Status &amp; Implication</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Crude oil (rate_component analogue)</strong></td>
-<td>100.0/100</td>
-<td><strong>MAXIMUM PRESSURE – EMERGING DISCONNECT</strong>. Crude at inflationary extremes, yet container freight rates show only modest gains (+4.5% max on FBX12). This indicates: (a) shipping lines have NOT yet fully translated energy cost inflation into rates, or (b) demand is soft enough to prevent pass-through. Either scenario is <strong>unfavorable for shipping credit quality</strong>.</td>
-</tr>
-<tr>
-<td><strong>Interest rates</strong></td>
-<td>100.0/100</td>
-<td><strong>MATERIAL HEADWIND</strong> – Rising rates inflate vessel financing costs, port fees, and working capital requirements. Shipping lines carry high leverage; cost of debt is rising faster than freight rates can offset. This is a <strong>lag indicator</strong>: Q1 2024 earnings will reflect 2023's rate rises but not yet recover from 2024's cost increases.</td>
-</tr>
-</tbody>
-</table></div>
-<h3>The Critical Disjuncture</h3>
-<p><strong>Inflationary inputs are elevated (crude +100, rates +100) but freight pricing power is weak (composite 48).</strong></p>
-<p>This gap suggests:
-- <strong>Shipping operators are margin-squeezed</strong> despite nominally "stable" demand signals
-- Input cost inflation is <strong>not self-correcting via rate increases</strong> in the near term
-- Weak demand (CN_MED -0.5%, CN_USEC -1.1%) prevents pricing power
-- <strong>Bunker deflation (0.4%) is the only operational cost relief</strong>, and it's negligible</p>
+<p><strong>Key Insight on Cost Lag:</strong>
+The <strong>rate_component at 100/100 is paradoxically reassuring for inflation control</strong>: rate saturation means further demand shocks cannot simply inflate via higher freight premiums. Conversely, the <strong>crude_component (71.3) vs. bunker_fuel (1.2) divergence</strong> reveals a <strong>2-4 week cost transmission lag</strong>—operators currently absorbing margin squeeze on bunker costs, not yet passing through. Insurance claim frequency/severity and credit deterioration risk in shipping operators peaks in this lag window.</p>
+<p><strong>Materialised vs. Forward-Looking:</strong>
+- ✅ <strong>Materialised:</strong> Freight rates, current bunker costs
+- ⚠️ <strong>Not-Yet-Passed-Through:</strong> ~70 points of crude-embedded inflation waiting to flow through carrier fuel surcharges in weeks 3-6; this will create visible CPI/PPI upticks in transport-dependent sectors (retail, manufacturing)</p>
 <hr />
 <h2>(3) GEOPOLITICAL &amp; LABOUR ROUTE RISK</h2>
-<h3>Geopolitical Risk: 65/100 (Elevated, with Acute Spike Risk)</h3>
-<p><strong>Riyadh missile incident + Red Sea volatility:</strong>
-- Directly correlates with <strong>FBX21 momentum spike (+7.5%)</strong>
-- Signals <strong>Suez-diverting traffic</strong> (adding 10–15 days to Asia–Europe routes)
-- <strong>Cost pass-through in selective routes</strong>: FBX21 spiking while CN_MED declines (-0.5%) suggests geopolitical risk is fragmenting the market
-  - Charterers using alternative routes pay premiums (FBX21 ↑)
-  - Traditional Suez routes see volume drain and price pressure (CN_MED ↓)
-- <strong>Reinsurance implications</strong>: War risk premiums on bunkers and hull insurance are rising; this is a <strong>headwind for shipping company cash flow</strong> but an <strong>uplift for specialty/P&amp;I reinsurance premiums</strong></p>
-<p><strong>UK ports dispute with Brussels over ETS diversion:</strong>
-- Creates <strong>selective route risk</strong> but not a systemic shock (CN_NEUR stable at +1.1%)
-- Suggests <strong>marginal rerouting</strong> rather than lane closure; impact contained
-- Regulatory friction (not physical conflict) = <strong>manageable volatility</strong>, not structural disruption</p>
-<h3>Labour Disruption: 35/100 (Moderate, Sector-Specific)</h3>
-<ul>
-<li><strong>Not acute</strong> (score below geopolitical), but watch for:</li>
-<li>Port labour disputes (especially West Coast US, reflected in CN_USWC flat -0.3%) delaying vessel turnarounds</li>
-<li>Crew availability in Asia impacting positioning costs</li>
-<li>This is a <strong>chronic friction factor</strong>, not an imminent trigger event</li>
-<li><strong>No COST SQUEEZE WARNING active</strong> = market has not yet repriced labour cost escalation</li>
-</ul>
-<h3>Port Congestion: 55/100 (Moderate, Structural)</h3>
-<ul>
-<li><strong>Likely suppressing Asia–Europe rates</strong> (CN_MED -0.5% decline correlated with congestion-induced scheduling uncertainty)</li>
-<li><strong>Supports Americas divergence</strong>: SAM at +5.6% reflects ore demand, while US East Coast (-1.1%) reflects congestion-driven cascading delays</li>
-<li><strong>Structural friction</strong> not transient; will continue to cap pricing power in congested hubs</li>
-</ul>
-<p><strong>Summary Risk Profile:</strong>
-- Geopolitical &gt; labour &gt; congestion in terms of current intensity
-- FBX21 spike is the only <strong>kinetic indicator</strong> of acute risk; other signals are slow-moving structural factors
-- No imminent supply-chain collapse, but <strong>persistent friction is preventing margin recovery</strong> despite elevated input costs</p>
+<p><strong>Labour Disruption: High Signal (65/100)</strong></p>
+<p><strong>Primary Risk Cluster: Northern Europe (Scandinavia)</strong>
+- Norway Reach Subsea strike now active following resolution of one offshore wage dispute—indicates labour market tightness and willingness to escalate
+- Multiple cascading maritime/offshore labour disputes across Norway region suggest structural wage/benefit demands (likely driven by energy sector wage inflation spillover)
+- <strong>Route Exposure:</strong> CN_NEUR (+1.1% WoW) is directly exposed; any port congestion spillover (currently low at 25/100) could spike if Rotterdam/Hamburg throughput is disrupted
+- <strong>Risk Vector:</strong> If Norwegian/Scandinavian labour actions spread to container terminal workers, CN_MED and CN_NEUR rates could reverse sharply upward despite current weakness; this is a <em>tail-risk volatility driver</em></p>
+<p><strong>Secondary Signal: Shipyard Consolidation (MSC/Rheinmetall Romanian acquisition)</strong>
+- MSC's €138m Romanian shipyard acquisition indicates capacity-building for repair/newbuild, reducing near-term supply-side bottlenecks
+- <strong>Medium-term implication:</strong> Lower newbuild delivery delays → eventual supply normalization → structural rate pressure in 18-24 months
+- <strong>Immediate implication:</strong> No imminent cost shock from yard constraints; labour disputes remain primary risk</p>
+<p><strong>Geopolitical Risk: Moderate but Acute (35/100)</strong>
+- Score of 35/100 suggests elevated but not extreme; however, typical geopolitical risk triggers (Strait transit disruptions, Red Sea rerouting, sanctions) not explicitly itemized
+- <strong>Assumption:</strong> Score reflects general macro tension, not active bottleneck; however, portfolio should stress-test for sudden spike to 60+ if Suez/Gulf tensions escalate</p>
+<p><strong>Labour-Specific Route Impact Matrix:</strong>
+| Route | Labour Risk | Current Momentum | Recommendation |
+|---|---|---|---|
+| CN_NEUR | <strong>HIGH</strong> (Scandinavia) | STABLE | Monitor weekly; hedge via short intermediate-dated rate forwards |
+| CN_MED | MEDIUM (spillover) | STABLE but weakening | Watch for port delays; currently priced weak (may have priced labour risk already) |
+| CN_SAM, CN_OCE | LOW | STABLE/STRONG | Maintain exposure; low labour friction in key ports |
+| CN_USEC, CN_USWC | MEDIUM (US West Coast labour history) | Weak/stable | West Coast port labour historically volatile; weakness may reflect forward risk pricing |</p>
 <hr />
 <h2>(4) ACTIONABLE PORTFOLIO IMPLICATION</h2>
-<h3>For Fixed Income &amp; Multi-Asset Insurance Portfolios: Downgrade Shipping Credit Outlook; Increase Reinsurance Allocation</h3>
-<p><strong>The Core Thesis:</strong>
-Shipping companies face a <strong>structural margin squeeze</strong> in H1 2024. While input costs (crude, interest rates) are at inflationary extremes (combined score 100+), freight pricing power is weak (composite 48/100), and cost pass-through is incomplete. This creates a <strong>profitability headwind that credit markets have not fully priced in</strong>.</p>
-<h4>Three Specific Actions:</h4>
-<p><strong>1. Reduce exposure to shipping lines' corporate bonds and bank facilities</strong>
-- <strong>Why</strong>: Leverage ratios will deteriorate as debt service costs rise (100/100 rate inflation) faster than EBITDA (48/100 freight pricing). Q1–Q2 2024 credit spread compression will likely reverse as earnings guidance disappoints.
-- <strong>Timing</strong>: The divergence between input costs and freight rates is currently masked by "stable momentum" in rates. Once Q1 earnings season (March–April) reveals margin compression, spreads widen. Reduce positions before that repricing.
-- <strong>Target</strong>: Reduce BBB-rated shipping bonds by 15–20%; avoid new issuance in vessel-financing tranches</p>
-<p><strong>2. Increase allocation to specialty insurance and P&amp;I reinsurance</strong>
-- <strong>Why</strong>: Geopolitical risk (65/100) + rising interest rates (100/100) trigger:
-  - Higher war risk premiums on hull &amp; machinery, P&amp;I claims from crew welfare/wage disputes
-  - Increased bunker hedging demand (hedging cost inflation on fuel supply contracts)
-  - Reinsurance pricing power is <strong>inverting</strong> relative to shipping rates: as shipping spreads compress, reinsurance premiums (war, labour, casualty) are contracting less or even rising
-- <strong>Timing</strong>: Underwrite increased P&amp;I and war risk capacity now; premium-to-payout ratios are favorable
-- <strong>Target</strong>: Add 2–3% portfolio weight to specialty reinsurance funds; rotate out of marine hull underwriters with concentrated shipping exposure</p>
-<p><strong>3. Adjust inflation assumptions downward for shipping-linked sectors; revise credit default scenarios</strong>
-- <strong>Why</strong>: The 48/100 composite inflationary score masks a critical gap—<strong>input costs are real, but output pricing is not keeping pace</strong>. This means:
-  - Shipping companies will <strong>not be inflation hedges</strong> for your portfolio (contrary to conventional wisdom in high-inflation regimes)
-  - Default probability models calibrated on "stable momentum" are <em>under-estimating</em> stress scenarios
-  - Covenant breach risk (leverage ratios, interest coverage) is rising faster than models assume
-- <strong>Revision</strong>: In Monte Carlo credit scenarios, shift shipping default probability <em>up</em> by 50–75 bps over 12-month horizon, despite "stable" momentum signals</p>
+<h3><strong>Recommendation: Recalibrate Inflation Assumptions &amp; Reduce Shipping Credit Exposure in Near-Term (4-8 Week Horizon)</strong></h3>
+<p><strong>Rationale:</strong></p>
+<ol>
+<li><strong>Inflation Pass-Through Timeline Mismatch</strong></li>
+<li>Portfolio inflation assumptions likely embedded 2-3 month CPI/PPI forecasts assuming linear freight/bunker cost translation</li>
+<li><strong>Reality:</strong> Rate component already at ceiling (100/100); bunker cost transmission is <em>compressed into weeks 3-8</em>, not distributed over months</li>
+<li><strong>Action:</strong> Revise forward inflation expectations for Q1/Q2 (depending on current calendar) to show <strong>front-loaded energy/transport cost spikes in weeks 4-6</strong>, then moderation</li>
+<li>
+<p>This creates tactical duration opportunity: <em>front-end nominal yields may spike more than long-end, flattening the curve and creating cheap 7-10Y positioning</em></p>
+</li>
+<li>
+<p><strong>Credit Quality &amp; Operator Margin Squeeze</strong></p>
+</li>
+<li>Shipping operators currently in margin-compression phase (rising bunker costs, stable/falling freight rates in key lanes, fixed debt service)</li>
+<li>Labour disruption risk in Northern Europe elevates probability of operational disruptions → missed SLA penalties, higher insurance claims</li>
+<li><strong>Action:</strong> <strong>De-rate or sell</strong> near-dated (6-12 month) credit exposure to mid-tier container operators and ship financiers exposed to Scandinavia/Northern Europe</li>
+<li>Prioritize <strong>investment-grade, diversified global operators</strong> (MSC, Maersk) over regional players during this window</li>
+<li>
+<p><strong>Avoid:</strong> Shipping-linked bonds maturing in 12-18 months without strong covenant cushions; labour settlement risks create refinancing stress</p>
+</li>
+<li>
+<p><strong>Reinsurance Cost Outlook &amp; Insurance Timing</strong></p>
+</li>
+<li>Maritime/cargo insurance premium inflation will accelerate over next 6-8 weeks as claims experience from current operator margin squeeze becomes visible in loss ratios</li>
+<li><strong>Action:</strong> <strong>Front-run reinsurance cost increases</strong> by purchasing maritime XoL reinsurance renewals <em>now</em> rather than at April/June renewal windows when market will price in Q1 loss experience</li>
+<li>
+<p>Current labour news sentiment (65/100) will push actuarial risk repricing; early positioning gains 10-15% cost advantage vs. market-wide renewals</p>
+</li>
+<li>
+<p><strong>Specific Portfolio Tilt</strong></p>
+</li>
+<li><strong>Reduce:</strong> Short-duration corporate credit in shipping/logistics (6-12m maturity)</li>
+<li><strong>Increase:</strong> Long-duration government bonds in bunker-import-dependent economies (Germany, Japan, Singapore) on expectation of front-loaded inflation surprise followed by Fed/ECB response</li>
+<li><strong>Hedge:</strong> Use FBX21 outperformance (+7.5%) as a tactical signal to <em>increase</em> exposure to long-haul tradelane capacity (likely LCL players, Asian consolidators); this suggests demand shift toward niche/less-commoditized services</li>
+<li><strong>Monitor:</strong> Map CN_NEUR exposure by operator; establish weekly labour news triggers for position rebalancing</li>
+</ol>
 <hr />
-<h3>Why This Matters Now</h3>
-<p>The dataset shows <strong>no cost squeeze warning active</strong>, which is a <em>false comfort signal</em>. The warning system is designed to trigger on acute, rapid cost shocks. But the current dynamic is a <strong>slow-bleed margin compression</strong>:
-- Input costs are elevated and sticky (crude 100, rates 100)
-- Demand is too soft to push through price increases (composite 48)
-- Bunker deflation (0.4%) is <strong>not enough</strong> to offset higher debt service
-- Geopolitical friction (65/100) is forcing selective rerouting, which <strong>reduces fleet utilization</strong> and increases per-container costs</p>
-<p>This is a <strong>multi-quarter headwind</strong>, not a headline risk. Your insurance portfolio's credit models are currently treating shipping as "stable" based on WoW momentum. <strong>That is the precise moment to de-risk</strong>, before volatility reprices.</p>
+<h2><strong>Summary Table: Risk-Return Profile</strong></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Factor</th>
+<th>Current Signal</th>
+<th>4-Week Outlook</th>
+<th>Portfolio Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Demand</strong></td>
+<td>Bifurcated; emerging routes +, mature routes −</td>
+<td>Orderly rebalancing</td>
+<td>Neutral; tactical long non-Asia-Europe</td>
+</tr>
+<tr>
+<td><strong>Inflation</strong></td>
+<td>50/100, rate-maxed, energy lagged</td>
+<td>Front-loaded bunker cost spike</td>
+<td><strong>Rotate to long-duration, de-rate near-term credit</strong></td>
+</tr>
+<tr>
+<td><strong>Labour Risk</strong></td>
+<td>65/100, Scandinavia-concentrated</td>
+<td>High probability of disruptions</td>
+<td><strong>Sell/hedge CN_NEUR exposure, trim shipping credit</strong></td>
+</tr>
+<tr>
+<td><strong>Geopolitical</strong></td>
+<td>35/100, latent tail risk</td>
+<td>Watch-and-wait posture</td>
+<td>Maintain but stress-test for 60+ scenarios</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Confidence Level:</strong> Medium-High (data quality limited by unmapped FBX routes; recommend supplementary AIS/TEU volume confirmation for CN_SAM &amp; FBX21 strength claims).</p>
 <hr />
-<p><strong>Recommendation Horizon</strong>: Execute reduction in shipping credit by end of Q4 2023 / early Q1 2024, ahead of earnings season.</p>
-<hr />
-<p><strong>Inflationary Pressure Score: 48 / 100</strong></p>
+<p><strong>Inflationary Pressure Score: 50 / 100</strong></p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -287,15 +300,15 @@ Shipping companies face a <strong>structural margin squeeze</strong> in H1 2024.
 <tbody>
 <tr>
 <td>Bunker Fuel (VLSFO Singapore 4W Δ)</td>
-<td>0</td>
+<td>1</td>
 <td>35%</td>
 <td>⚠ 30w of 52w</td>
 </tr>
 <tr>
 <td>Brent Crude (4W Δ)</td>
-<td>66</td>
+<td>71</td>
 <td>20%</td>
-<td>⚠ 29w of 52w</td>
+<td>⚠ 30w of 52w</td>
 </tr>
 <tr>
 <td>Freight Rate Composite (4W Δ)</td>
@@ -312,7 +325,7 @@ Shipping companies face a <strong>structural margin squeeze</strong> in H1 2024.
 </tbody>
 </table></div>
 <blockquote>
-<p>⚠ <strong>Partial normalisation window</strong> — the 52-week min-max scale could not be filled for: Bunker Fuel 30 weeks; Brent Crude 29 weeks; Freight Rate Composite 30 weeks. These components are normalised on the history that exists, so their scores are more volatile than a full-window score and are not comparable to one.</p>
+<p>⚠ <strong>Partial normalisation window</strong> — the 52-week min-max scale could not be filled for: Bunker Fuel 30 weeks; Brent Crude 30 weeks; Freight Rate Composite 30 weeks. These components are normalised on the history that exists, so their scores are more volatile than a full-window score and are not comparable to one.</p>
 <p>⚠ <strong>Excluded from the composite</strong> — Baltic Dry Index: fewer than 12 weeks of real data. Reported as INSUFFICIENT_HISTORY rather than normalised on a window too short to be meaningful; the remaining weights are redistributed proportionally.</p>
 <p>ℹ️ <strong>Scale breaks</strong> — component scores are min-max normalised, so they are only comparable across reports that share the same scale. Scores in reports published before 2026-07-27 are <strong>not</strong> comparable to these. Changes that moved the scales, newest first:</p>
 <ul>
@@ -331,26 +344,26 @@ Shipping companies face a <strong>structural margin squeeze</strong> in H1 2024.
 <tbody>
 <tr>
 <td>Geopolitical Risk</td>
-<td style="text-align: center;">65</td>
-<td>🟠 MODERATE</td>
-</tr>
-<tr>
-<td>Labour Disruption Risk</td>
 <td style="text-align: center;">35</td>
 <td>🟢 LOW</td>
 </tr>
 <tr>
-<td>Port Congestion Risk</td>
-<td style="text-align: center;">55</td>
+<td>Labour Disruption Risk</td>
+<td style="text-align: center;">65</td>
 <td>🟠 MODERATE</td>
+</tr>
+<tr>
+<td>Port Congestion Risk</td>
+<td style="text-align: center;">25</td>
+<td>🟢 LOW</td>
 </tr>
 </tbody>
 </table></div>
 <p><strong>Key Events Detected:</strong>
-- Missile incident from Riyadh
-- UK ports dispute with Brussels over ETS diversion
-- West Africa ore boom with increased VLOC deployment</p>
-<p><strong>Routes at Risk:</strong> Red Sea - Suez Canal - Mediterranean · UK - Continental Europe · West Africa (Guinea, Angola) - China · Middle East loading terminals · Northern Europe container gateways</p>
+- Norway Reach Subsea strike begins following resolution of one offshore wage dispute
+- MSC and Rheinmetall acquire Romanian shipyard in €138m takeover
+- Multiple labour disputes in offshore/maritime sector across Norway region</p>
+<p><strong>Routes at Risk:</strong> North Sea offshore supply routes · Baltic-Mediterranean container routes · East Asia tanker routes (China coast) · Middle East-Asia tanker routes</p>
 <hr />
 <h2>Rate Summary</h2>
 <div class="table-wrap"><table>
@@ -370,7 +383,7 @@ Shipping companies face a <strong>structural margin squeeze</strong> in H1 2024.
 <td>$648</td>
 <td>N/A</td>
 <td>▼ 0.5%</td>
-<td>$592</td>
+<td>$595</td>
 <td>🟢 STABLE</td>
 </tr>
 <tr>
@@ -378,7 +391,7 @@ Shipping companies face a <strong>structural margin squeeze</strong> in H1 2024.
 <td>$9,713</td>
 <td>N/A</td>
 <td>▲ 1.1%</td>
-<td>$9,617</td>
+<td>$9,621</td>
 <td>🟢 STABLE</td>
 </tr>
 <tr>
@@ -386,7 +399,7 @@ Shipping companies face a <strong>structural margin squeeze</strong> in H1 2024.
 <td>$3,927</td>
 <td>N/A</td>
 <td>▲ 3.2%</td>
-<td>$3,720</td>
+<td>$3,721</td>
 <td>🟢 STABLE</td>
 </tr>
 <tr>
@@ -394,7 +407,7 @@ Shipping companies face a <strong>structural margin squeeze</strong> in H1 2024.
 <td>$3,442</td>
 <td>N/A</td>
 <td>▲ 5.6%</td>
-<td>$3,372</td>
+<td>$3,362</td>
 <td>🟢 STABLE</td>
 </tr>
 <tr>
@@ -402,7 +415,7 @@ Shipping companies face a <strong>structural margin squeeze</strong> in H1 2024.
 <td>$351</td>
 <td>N/A</td>
 <td>▼ 1.1%</td>
-<td>$361</td>
+<td>$362</td>
 <td>🟢 STABLE</td>
 </tr>
 <tr>
@@ -410,7 +423,7 @@ Shipping companies face a <strong>structural margin squeeze</strong> in H1 2024.
 <td>$8,126</td>
 <td>N/A</td>
 <td>▼ 0.3%</td>
-<td>$8,249</td>
+<td>$8,250</td>
 <td>🟢 STABLE</td>
 </tr>
 <tr>
@@ -418,7 +431,7 @@ Shipping companies face a <strong>structural margin squeeze</strong> in H1 2024.
 <td>$440</td>
 <td>N/A</td>
 <td>▲ 4.5%</td>
-<td>$443</td>
+<td>$442</td>
 <td>🟢 STABLE</td>
 </tr>
 <tr>
@@ -434,7 +447,7 @@ Shipping companies face a <strong>structural margin squeeze</strong> in H1 2024.
 <td>$1,201</td>
 <td>N/A</td>
 <td>▲ 7.5%</td>
-<td>$1,062</td>
+<td>$1,068</td>
 <td>🟠 SPIKE</td>
 </tr>
 <tr>
@@ -442,7 +455,7 @@ Shipping companies face a <strong>structural margin squeeze</strong> in H1 2024.
 <td>$2,847</td>
 <td>N/A</td>
 <td>▲ 1.2%</td>
-<td>$2,732</td>
+<td>$2,739</td>
 <td>🟢 STABLE</td>
 </tr>
 <tr>
@@ -450,7 +463,7 @@ Shipping companies face a <strong>structural margin squeeze</strong> in H1 2024.
 <td>$1,205</td>
 <td>N/A</td>
 <td>▲ 0.4%</td>
-<td>$1,185</td>
+<td>$1,189</td>
 <td>🟢 STABLE</td>
 </tr>
 <tr>
@@ -458,17 +471,17 @@ Shipping companies face a <strong>structural margin squeeze</strong> in H1 2024.
 <td>$2,343</td>
 <td>N/A</td>
 <td>▼ 0.8%</td>
-<td>$2,385</td>
+<td>$2,381</td>
 <td>🟢 STABLE</td>
 </tr>
 </tbody>
 </table></div>
 <hr />
-<p><em>Generated 2026-10-19 02:58 UTC</em></p>
+<p><em>Generated 2026-10-20 03:08 UTC</em></p>
 <div class="report-nav"><a href="reports/archive.html">View all historical reports →</a></div>
 </main>
 <footer>
-  Published via GitHub Pages &mdash; updated 2026-10-19 02:58 UTC
+  Published via GitHub Pages &mdash; updated 2026-10-20 03:08 UTC
 </footer>
 </body>
 </html>
