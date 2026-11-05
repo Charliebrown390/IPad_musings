@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Freight Report — 2026-11-05</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: #0d1117;
+  color: #c9d1d9;
+  line-height: 1.6;
+  font-size: 16px;
+}
+nav {
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  padding: 0.85rem 1.5rem;
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+}
+nav .brand { font-weight: 700; font-size: 1rem; color: #e6edf3; text-decoration: none; }
+nav a { color: #58a6ff; text-decoration: none; font-size: 0.9rem; }
+nav a:hover { text-decoration: underline; }
+main {
+  max-width: 960px;
+  margin: 2rem auto;
+  padding: 0 1.25rem;
+}
+h1 { font-size: 1.4rem; margin-bottom: 1rem; color: #e6edf3; }
+h2 { font-size: 1.1rem; margin: 1.75rem 0 0.6rem; color: #e6edf3; }
+p  { margin-bottom: 0.9rem; }
+strong { color: #e6edf3; }
+em { color: #8b949e; font-size: 0.85rem; }
+hr { border: none; border-top: 1px solid #30363d; margin: 1.5rem 0; }
+a  { color: #58a6ff; }
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+th {
+  background: #161b22;
+  border: 1px solid #30363d;
+  padding: 0.55rem 0.9rem;
+  text-align: left;
+  color: #8b949e;
+  font-weight: 600;
+}
+td {
+  border: 1px solid #21262d;
+  padding: 0.55rem 0.9rem;
+}
+tr:nth-child(even) td { background: #161b22; }
+.alert-banner {
+  background: #3d1a1a;
+  border: 1px solid #f85149;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+  color: #f85149;
+  font-weight: 600;
+}
+.integrity-banner {
+  background: #3d2f0f;
+  border: 1px solid #d29922;
+  border-left: 4px solid #d29922;
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 1.25rem;
+  color: #e3b341;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.integrity-banner .sub {
+  display: block;
+  margin-top: 0.4rem;
+  font-weight: 400;
+  color: #d7c9a7;
+}
+.archive-list { list-style: none; padding: 0; }
+.archive-list li {
+  padding: 0.6rem 0;
+  border-bottom: 1px solid #21262d;
+  font-size: 0.95rem;
+}
+.archive-list li:last-child { border-bottom: none; }
+.report-nav {
+  display: flex;
+  gap: 1rem;
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid #30363d;
+  font-size: 0.875rem;
+}
+footer {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: #8b949e;
+  font-size: 0.8rem;
+  border-top: 1px solid #21262d;
+  margin-top: 3rem;
+}
+@media (max-width: 600px) {
+  h1 { font-size: 1.2rem; }
+  nav { gap: 1rem; }
+}
+</style>
+</head>
+<body>
+<nav>
+  <a class="brand" href="../index.html">📦 Freight Tracker</a>
+  <a href="../reports/archive.html">Archive</a>
+</nav>
+<main>
+<div class="alert-banner">🚨 Urgent signals detected — review route table below</div>
+<h1>🚨 Freight Rate Weekly Report — 2026-11-05</h1>
+<blockquote>
+<p>ℹ️ <strong>Data provenance</strong> — 168 of 2,196 rows are synthetic (seed) data and are <strong>excluded from every calculation</strong> in this report; 2,028 real observations were used.</p>
+<p>Quarantined, not deleted, for audit. Sources: <code>seed-data</code> (156), <code>seed-data/march-2026</code> (12).</p>
+<p>⚠ <strong>STALE DATA WARNING</strong> — 2 indices not reporting usable data (threshold 14 days):</p>
+<ul>
+<li><strong>SCFI</strong> — 🛑 <strong>no real data at all</strong>; every one of its 78 rows is synthetic. This index has never scraped successfully. Contributes nothing to any calculation.</li>
+<li><strong>WCI</strong> — 🛑 <strong>no real data at all</strong>; every one of its 56 rows is synthetic. This index has never scraped successfully. Contributes nothing to any calculation.
+</li>
+</ul>
+</blockquote>
+<h2>Executive Summary</h2>
+<h1>FREIGHT MARKET EXECUTIVE SUMMARY</h1>
+<h2>Week-on-Week Analysis &amp; Portfolio Implications</h2>
+<hr />
+<h2>(1) DEMAND TRENDS BY REGION</h2>
+<p><strong>Bifurcated demand picture with divergent momentum signals:</strong></p>
+<p>The freight data reveals a <strong>sharp contrast between Atlantic and Asia-Pacific corridors</strong>:</p>
+<ul>
+<li>
+<p><strong>Mediterranean (CN_MED): -10.3% WoW, COOLING</strong> – The most pronounced weakness. This signals softening demand from Europe and North Africa, likely reflecting post-holiday inventory normalization and weak continental growth signals. This is the most material deterioration in the dataset.</p>
+</li>
+<li>
+<p><strong>Northern Europe (CN_NEUR): -6.2% WoW, STABLE</strong> – Secondary Atlantic weakness, consistent with CN_MED trend. Northern European demand is cooling but not volatile, suggesting orderly rather than shock-driven rate compression.</p>
+</li>
+<li>
+<p><strong>Transpacific &amp; Americas: Stabilizing</strong> – CN_OCE (+2.9%), CN_SAM (+1.2%), CN_USEC (flat), and CN_USWC (-0.3%) show either modest growth or stability. The transpacific route's positive momentum aligns with news sentiment on this corridor emerging as "liner shipping's golden trade," driven by capacity constraints and demand resilience from US e-commerce and nearshoring flows.</p>
+</li>
+</ul>
+<p><strong>Composite FBX indices</strong> (broader market proxies) show predominantly flat-to-stable momentum, with one material outlier: <strong>FBX24 +4.5% with SPIKE momentum</strong>. This is noteworthy and warrants closer monitoring – likely reflecting a specific oversized contract or capacity crunch on a particular trade lane (possibly Asia-US or intra-Asia).</p>
+<p><strong>Portfolio implication of demand trends:</strong> The Atlantic weakness is not yet severe enough to trigger broad-based rate collapse, but the -10% Mediterranean decline suggests margin compression for carriers on this route. Investors should monitor whether this weakness spreads eastward; if CN_NEUR and CN_MED deteriorate further, we may see cascade effects on transatlantic debt instruments and equity valuations.</p>
+<hr />
+<h2>(2) INFLATIONARY COST PRESSURES: MATERIALIZED VS. EMBEDDED</h2>
+<p><strong>The inflationary picture is <strong>highly asymmetric</strong> and reveals a critical distinction for credit analysis:</strong></p>
+<h3><strong>Already Materialized Input Costs (Limited Impact):</strong></h3>
+<ul>
+<li><strong>Bunker fuel component: 0.3/100</strong> with 4W change of +0.3% – negligible. Bunker costs have stabilized; this is NOT a driver of future rate pressure.</li>
+<li><strong>Crude oil component: 31.0/100</strong> – moderate, indicating crude prices are elevated but not extreme. This feeds into fuel costs with a lag, but the low bunker reading suggests pass-through is already complete.</li>
+</ul>
+<h3><strong>NOT YET Passed Through to Freight Rates (High Impact):</strong></h3>
+<ul>
+<li><strong>Rate component: 97.1/100</strong> – <strong>This is the critical figure.</strong> The rate component score is extremely elevated, signaling massive divergence between <strong>underlying shipping input costs (labor, vessel deployment, capital) and the freight rates being charged</strong>. </li>
+</ul>
+<p>This suggests:
+  1. <strong>Rate inflation has NOT been fully absorbed by shippers</strong> – carriers are still pricing power into the market despite Atlantic softness
+  2. **A significant <strong>lag between cost realization and rate recovery</strong> – carriers may be attempting to maintain pricing despite demand cooling, creating a compression risk
+  3. <strong>Alternatively, this could reflect anticipated future costs</strong> (newbuild capacity constraints, labor agreements, regulatory compliance) not yet reflected in current spot rates</p>
+<ul>
+<li><strong>Composite score of 38.2/100 (moderate-low)</strong> masks the true inflationary risk. The headline number is benign, but the 97.1 rate component reveals embedded pricing power that remains a <strong>tail risk for shippers and a credit positive for well-capitalized carriers</strong> holding pricing discipline.</li>
+</ul>
+<h3><strong>Key Distinction for Bond Investors:</strong></h3>
+<p>The <strong>low composite score (38/100) coupled with high rate component (97.1/100) suggests an inflection point</strong>. If Mediterranean weakness spreads or demand drops more sharply, carriers will be forced to <em>reduce</em> rates to maintain volume. This creates <strong>refinancing risk for leveraged carrier debt</strong> and favors shorter-duration, floating-rate exposures over fixed-rate bonds.</p>
+<hr />
+<h2>(3) GEOPOLITICAL &amp; LABOUR ROUTE RISK</h2>
+<p><strong>Risk environment: Elevated but compartmentalized</strong></p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Risk Factor</th>
+<th>Score</th>
+<th>Interpretation</th>
+<th>Route Impact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Geopolitical</strong></td>
+<td>25/100</td>
+<td><strong>Moderate</strong></td>
+<td>Houthi disruptions (Red Sea), potential Ukraine escalation, and Arctic regulatory tightening all present, but no active shipping blockades. The "Greenland scrubber ban &amp; Arctic environmental crackdown" is regulatory/operational, not acute geopolitical.</td>
+</tr>
+<tr>
+<td><strong>Labour Disruption</strong></td>
+<td>15/100</td>
+<td><strong>Low</strong></td>
+<td>No active port strikes or crew supply crises signaled. This is the least pressing risk.</td>
+</tr>
+<tr>
+<td><strong>Port Congestion</strong></td>
+<td>20/100</td>
+<td><strong>Low-Moderate</strong></td>
+<td>No major choke points reported; supply chains are flowing. This supports the stable demand signals.</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Route-Specific Vulnerabilities:</strong></p>
+<ul>
+<li>
+<p><strong>CN_MED &amp; CN_NEUR (Atlantic weakness routes):</strong> Exposed to UK-EU trade friction and potential North African instability. Geopolitical risk (25/100) could rapidly escalate costs if Suez/Red Sea disruptions spread or if Mediterranean ports face labor actions.</p>
+</li>
+<li>
+<p><strong>CN_OCE (Transpacific strength):</strong> Sheltered from near-term geopolitical shocks; Arctic regulatory tightening (mentioned in news) will increase fuel costs for polar routes but is a <em>known</em> future headwind, already partially priced via the 97.1 rate component score.</p>
+</li>
+<li>
+<p><strong>Scrubber ban (Greenland) implication:</strong> This is the only acute operational/regulatory risk. Vessels can no longer use scrubber exemptions in Arctic waters, forcing switch to lower-sulfur fuel (costlier). This increases voyage costs on northern routes (CN_NEUR proximity) but is <strong>already anticipated</strong> by market participants (hence the high rate component score).</p>
+</li>
+</ul>
+<p><strong>Labour sentiment risk:</strong> Low (15/100) suggests wage inflation is not currently spiking, but this should be monitored against renewal cycles in Q1-Q2 2024 (West Coast port labor agreements, European dockworker unions).</p>
+<hr />
+<h2>(4) ACTIONABLE PORTFOLIO IMPLICATION</h2>
+<h3><strong>Recommendation: Reassess Inflation Pass-Through Assumptions in Fixed-Income Exposure</strong></h3>
+<p><strong>Specific Action:</strong></p>
+<p>For portfolios holding <strong>shipping company senior debt and bonds</strong>, the 97.1 rate component coupled with -10.3% Mediterranean decline creates a <strong>critical mismatch in inflationary expectations</strong>:</p>
+<ol>
+<li>
+<p><strong>Current Market Assumption (Implicit in Bond Pricing):</strong> Carriers maintain pricing power and pass through costs to shippers indefinitely.</p>
+</li>
+<li>
+<p><strong>Revised Risk Signal:</strong> The Atlantic demand deterioration suggests this assumption has a <strong>6-12 month shelf life</strong>. If Mediterranean rates fall another 10-15% over the next 8 weeks, the 97.1 rate component will correct sharply downward, forcing carriers to absorb previously unrecovered costs.</p>
+</li>
+</ol>
+<p><strong>Specific Portfolio Actions:</strong></p>
+<ul>
+<li>
+<p><strong>Reduce overweight in fixed-rate shipping bonds</strong> (especially those due 2026-2027). The assumed coupon sustainability assumes rate stability; Atlantic softness breaks this.</p>
+</li>
+<li>
+<p><strong>Swap duration:</strong> Favor <strong>floating-rate notes (FRN) or bonds with step-down coupons</strong> expiring &lt;2 years. If rates compress, FRNs protect you; if rates hold, you capture the premium.</p>
+</li>
+<li>
+<p><strong>Increase credit vigilance on leveraged carriers</strong> (LTM Debt/EBITDA &gt;3.5x). These firms have thin margins and will feel Mediterranean pressure acutely. Consider reducing weightings on carriers with &gt;60% Atlantic exposure.</p>
+</li>
+<li>
+<p><strong>Monitor the FBX24 SPIKE (+4.5%)</strong> as a leading indicator. If this reverses to negative WoW next week, it signals demand deterioration is spreading from Atlantic to Asia-Pacific, which would justify a <strong>tactical 5-10% reduction in shipping sector allocation.</strong></p>
+</li>
+</ul>
+<p><strong>Reinsurance Angle:</strong> 
+- War risk premiums (P&amp;I, hull) may tighten if geopolitical escalates, but current 25/100 score does not yet warrant repricing. However, Arctic regulatory risk (scrubber ban) will <strong>increase claim frequency and severity</strong> on northern routes. Reinsurers should <strong>reprice Arctic transit coverage upward by 15-20%</strong> in Q1 renewals.</p>
+<hr />
+<h2>CONCLUSION</h2>
+<p>The freight market is at a <strong>subtle inflection point</strong>: Atlantic demand is cracking, but pricing power remains (evident in the 97.1 rate component). This creates a <strong>6-12 month window before margin compression hits carrier balance sheets</strong>. Insurance investors should de-risk fixed-rate shipping exposure now and monitor weekly MED/NEUR data for acceleration of declines. The transpacific strength and FBX24 spike are tactical positives but do not offset Atlantic deterioration at the portfolio level.</p>
+<hr />
+<p><strong>Inflationary Pressure Score: 38 / 100</strong></p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Score (0–100)</th>
+<th>Weight</th>
+<th>Normalisation window</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bunker Fuel (VLSFO Singapore 4W Δ)</td>
+<td>0</td>
+<td>35%</td>
+<td>⚠ 32w of 52w</td>
+</tr>
+<tr>
+<td>Brent Crude (4W Δ)</td>
+<td>31</td>
+<td>20%</td>
+<td>⚠ 32w of 52w</td>
+</tr>
+<tr>
+<td>Freight Rate Composite (4W Δ)</td>
+<td>97</td>
+<td>25%</td>
+<td>⚠ 32w of 52w</td>
+</tr>
+<tr>
+<td>Baltic Dry Index (4W Δ)</td>
+<td>INSUFFICIENT_HISTORY</td>
+<td>20%</td>
+<td>no data</td>
+</tr>
+</tbody>
+</table></div>
+<blockquote>
+<p>⚠ <strong>Partial normalisation window</strong> — the 52-week min-max scale could not be filled for: Bunker Fuel 32 weeks; Brent Crude 32 weeks; Freight Rate Composite 32 weeks. These components are normalised on the history that exists, so their scores are more volatile than a full-window score and are not comparable to one.</p>
+<p>⚠ <strong>Excluded from the composite</strong> — Baltic Dry Index: fewer than 12 weeks of real data. Reported as INSUFFICIENT_HISTORY rather than normalised on a window too short to be meaningful; the remaining weights are redistributed proportionally.</p>
+<p>ℹ️ <strong>Scale breaks</strong> — component scores are min-max normalised, so they are only comparable across reports that share the same scale. Scores in reports published before 2026-07-27 are <strong>not</strong> comparable to these. Changes that moved the scales, newest first:</p>
+<ul>
+<li><strong>2026-07-27 — Synthetic rows excluded from the normalisation history.</strong> 168 seed rows in freight_rates, and 280 in input_costs, were removed from the windows behind every component. The bunker and crude scales moved most: both had been built on real and fabricated observations mixed together.</li>
+</ul>
+</blockquote>
+<h2>News Sentiment Risk</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Risk Category</th>
+<th style="text-align: center;">Score (0–100)</th>
+<th>Level</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Geopolitical Risk</td>
+<td style="text-align: center;">25</td>
+<td>🟢 LOW</td>
+</tr>
+<tr>
+<td>Labour Disruption Risk</td>
+<td style="text-align: center;">15</td>
+<td>🟢 LOW</td>
+</tr>
+<tr>
+<td>Port Congestion Risk</td>
+<td style="text-align: center;">20</td>
+<td>🟢 LOW</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Key Events Detected:</strong>
+- Greenland's scrubber ban and Arctic environmental regulation crackdown
+- Transpacific route emerges as liner shipping's golden trade
+- Multiple newbuild orders across tanker and containership segments</p>
+<p><strong>Routes at Risk:</strong> Asia-North America (Transpacific) · China-Europe (LPG and product tanker routes) · Arctic/Suez routes (Greenland regulation impact) · Benelux-China (LPG carriers) · Regional African routes (Cameroon Gulfcam expansion)</p>
+<hr />
+<h2>Rate Summary</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Route</th>
+<th>FBX Rate</th>
+<th>WCI Rate</th>
+<th>WoW %</th>
+<th>4W Avg</th>
+<th>Signal</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>China/East Asia → Mediterranean</td>
+<td>$573</td>
+<td>N/A</td>
+<td>▼ 10.3%</td>
+<td>$628</td>
+<td>🔵 COOLING</td>
+</tr>
+<tr>
+<td>China/East Asia → North Europe</td>
+<td>$9,911</td>
+<td>N/A</td>
+<td>▼ 6.2%</td>
+<td>$9,938</td>
+<td>🟢 STABLE</td>
+</tr>
+<tr>
+<td>China/East Asia → Oceania</td>
+<td>$4,375</td>
+<td>N/A</td>
+<td>▲ 2.9%</td>
+<td>$4,060</td>
+<td>🟢 STABLE</td>
+</tr>
+<tr>
+<td>China/East Asia → South America</td>
+<td>$3,595</td>
+<td>N/A</td>
+<td>▲ 1.2%</td>
+<td>$3,450</td>
+<td>🟢 STABLE</td>
+</tr>
+<tr>
+<td>China/East Asia → North America East Coast</td>
+<td>$340</td>
+<td>N/A</td>
+<td>▲ 0.0%</td>
+<td>$348</td>
+<td>🟢 STABLE</td>
+</tr>
+<tr>
+<td>China/East Asia → North America West Coast</td>
+<td>$8,340</td>
+<td>N/A</td>
+<td>▼ 0.3%</td>
+<td>$8,246</td>
+<td>🟢 STABLE</td>
+</tr>
+<tr>
+<td>FBX12 – FBX12</td>
+<td>$441</td>
+<td>N/A</td>
+<td>▲ 0.0%</td>
+<td>$436</td>
+<td>🟢 STABLE</td>
+</tr>
+<tr>
+<td>FBX14 – FBX14</td>
+<td>$170</td>
+<td>N/A</td>
+<td>▲ 0.0%</td>
+<td>$170</td>
+<td>🟢 STABLE</td>
+</tr>
+<tr>
+<td>FBX21 – FBX21</td>
+<td>$1,155</td>
+<td>N/A</td>
+<td>▼ 3.8%</td>
+<td>$1,164</td>
+<td>🟢 STABLE</td>
+</tr>
+<tr>
+<td>FBX22 – FBX22</td>
+<td>$2,895</td>
+<td>N/A</td>
+<td>▲ 0.1%</td>
+<td>$2,855</td>
+<td>🟢 STABLE</td>
+</tr>
+<tr>
+<td>FBX24 – FBX24</td>
+<td>$1,574</td>
+<td>N/A</td>
+<td>▲ 4.5%</td>
+<td>$1,358</td>
+<td>🟠 SPIKE</td>
+</tr>
+<tr>
+<td>FBX26 – FBX26</td>
+<td>$2,406</td>
+<td>N/A</td>
+<td>▼ 0.3%</td>
+<td>$2,380</td>
+<td>🟢 STABLE</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<p><em>Generated 2026-11-05 04:51 UTC</em></p>
+<div class="report-nav"><a href="2026-11-04.html">← Older: 2026-11-04</a> &nbsp;|&nbsp; <a href="archive.html">All reports</a></div>
+</main>
+<footer>
+  Published via GitHub Pages &mdash; updated 2026-11-05 04:51 UTC
+</footer>
+</body>
+</html>
